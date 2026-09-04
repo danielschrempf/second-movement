@@ -2,7 +2,7 @@
 
 Research notes on the original Bandai Tamagotchi ("P1", 1996 Japan / 1997 US) as
 background for designing our own virtual pet. This is reference material, not a
-spec — our design (see [DESIGN.md](DESIGN.md)) is deliberately its own framework.
+spec — the pet's own design is in [CS50x Final Project.md](CS50x%20Final%20Project.md).
 
 ## 1. The hardware — and how it compares to ours
 
@@ -66,34 +66,6 @@ quality is the genetics.
 **Death.** Untreated sickness, or old age; accumulated care mistakes shorten the
 lifespan. The US version shows an angel; the Japanese original a ghost and
 tombstone. Then you start a new egg.
-
-## 3. Takeaways for our design (borrow the ideas, not the pet)
-
-Worth borrowing:
-
-- **Care mistakes as the core currency** — a counted, windowed "it called, did you
-  answer?" mechanic is simple, fair, and drives everything else
-- **Attention call with a timeout** maps perfectly to our hourly background check +
-  chirp + BELL indicator
-- **Stage-gated content** — even with only eye-sets instead of sprites, evolving
-  the *eye vocabulary* by life stage (baby eyes vs. elder eyes) gives the same
-  "what will I get?" hook
-- **Snack-vs-meal tension** (instant happiness with a long-term cost) is a lot of
-  game design for one branch
-- **Sleep schedule that the pet owns** (not just a fixed config) adds personality
-
-Deliberately different in ours:
-
-- **No sprite characters** — identity and mood live in eye animation, LED color,
-  and chirps (our display can't do sprites, so we lean into what it can do)
-- **Play = physical interaction** (accelerometer taps) instead of a button
-  guessing game — the watch is *worn*, which the P1 never was
-- **Lazy timestamp simulation** instead of an always-on loop — the P1 could afford
-  to poll constantly at 32 kHz; we sleep and compute elapsed state on wake
-- **No discipline/scolding in v1** — false-alarm calls are a great mechanic but
-  add UI complexity; noted as a possible later addition
-- **Real-world day cycle** — our pet lives on watch time (RTC), so its sleep
-  schedule can genuinely match the wearer's day
 
 ## Sources
 

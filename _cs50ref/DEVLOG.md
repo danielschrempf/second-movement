@@ -95,9 +95,7 @@ and code assistance by Claude Code (AI pair programmer), directed by Dan.
 - [x] Verify simulator build + run in browser
 - [x] Flash firmware.uf2 to the watch once to prove the full pipeline — verified on hardware, pet face placeholder displays on the watch
 - [x] Scaffold `pet_face` from the template, with placeholder eyes on screen
-- [ ] Design the eye/animation data tables
-- [ ] Design pet state machine (hunger/waste/mood/sickness/age + timestamps)
-- [ ] Compose the six chirps
+- [x] Design the pet — Dan's spec, Session 4
 
 ---
 
@@ -195,8 +193,12 @@ emmake make -j8 BOARD=sensorwatch_pro DISPLAY=classic build-sim/firmware.html
 
 ## Session 3 — 2026-08-16 — Whole-design sketch
 
+> **Superseded.** The design sketched in this session was replaced by Dan's own
+> spec in Session 4. `DESIGN.md` has been removed; its hardware notes live on in
+> [SEGMENT_MAP.md](SEGMENT_MAP.md).
+
 Chose to sketch the complete design before writing more code. Drafted
-[DESIGN.md](DESIGN.md): screen allocation around the classic LCD's shared-segment
+`DESIGN.md`: screen allocation around the classic LCD's shared-segment
 quirks (eyes in positions 6–7, optional mouth in 8–9, positions 4–5 as an
 animation stage), full button map, pet mechanics with lazy timestamp-based decay,
 persistence via RTC backup registers + littlefs for the record age, LED language,
@@ -239,3 +241,93 @@ even be a per-species trait, turning the art-direction dilemma into both/and.
 Plan: ship v1 with one animal but keep the indirection; second species is the
 stretch goal. Next: Dan is drawing the animation states on paper — the drawn
 state list will become the engine's animation-slot contract.
+
+---
+
+## Session 4 — 2026-09-03 — Dan's design, restructured face, second machine
+
+### Second development machine (Mac)
+
+Set up the Mac as a second dev box: ARM GNU Toolchain 15.3.rel1 (from ARM's
+tarball, into `~/`) and emsdk 6.0.9 (`~/emsdk`), both on `PATH` via `.zshrc`.
+Hardware and simulator builds verified. Findings that matter across machines are
+in the repo-root `CLAUDE.md`: the two GCCs differ (15.3 here vs apt's in WSL) so
+expect different flash sizes and warning sets; header edits still need a
+`make clean`; `make install` can flash directly from the Mac since `uf2conv.py`
+scans `/Volumes`.
+
+Repeatable setup, for the next Mac:
+
+```sh
+# ARM GCC — ARM's own tarball. (brew's gcc-arm-embedded cask is the same build
+# but ships as a .pkg that needs a sudo password.)
+curl -L -o /tmp/arm.tar.xz "https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-darwin-arm64-arm-none-eabi.tar.xz"
+tar -xf /tmp/arm.tar.xz -C ~
+
+# emsdk — what CI and the WSL box use. Not brew's emscripten.
+git clone --depth 1 https://github.com/emscripten-core/emsdk ~/emsdk
+~/emsdk/emsdk install latest && ~/emsdk/emsdk activate latest
+
+# ~/.zshrc (sourcing emsdk_env.sh costs ~0.1 s per shell)
+export PATH="$HOME/arm-gnu-toolchain-15.3.rel1-darwin-arm64-arm-none-eabi/bin:$PATH"
+source "$HOME/emsdk/emsdk_env.sh" >/dev/null 2>&1
+```
+
+Gotcha met along the way: non-login shells (scripts, Claude Code's Bash tool)
+don't read `.zshrc`, so a build from one fails with `arm-none-eabi-gcc: command
+not found` — export `PATH` inline or `source ~/emsdk/emsdk_env.sh` first.
+Apple's stock `make` 3.81 needed no replacement.
+
+### The design is now Dan's
+
+Dan wrote the pet's actual design as pseudo code in
+[CS50x Final Project.md](CS50x%20Final%20Project.md): a single "tic" mood meter
+(Happy / Confused / Upset / Angry / Dead at 1/2/3/4/6 tics, +1 tic per 6 h of
+rest), buffs and debuffs (play, hug, feed, poo, sleep disturbance), a button map
+(Light short/long = feed/hug, Alarm short/long = sweep/resurrect, shake = play),
+a 14-animation checklist (all sketched in Procreate Dreams, still to be
+converted to segment values), four sounds, a 21:00–05:00 sleep window, a
+4-pip feed queue, and a nausea counter for over-shaking.
+
+The Session 3 sketch (`DESIGN.md`) and the placeholder scaffold in `pet_face.c`
+were retired so nothing from that first pass lingers.
+
+### Feasibility check against Second Movement
+
+Everything in the spec maps onto the platform, with one correction:
+`EVENT_ACCELEROMETER_WAKE` (motion over threshold) is never delivered — its
+callback is commented out at `movement.c:1161`. Tap detection
+(`EVENT_SINGLE_TAP` / `EVENT_DOUBLE_TAP`) does work and a shake fires it
+repeatedly, so shake-to-play and the nausea count both ride on tap events. The
+simulator has no accelerometer, so it stands in Alarm-long (while alive) for a
+shake. The button map is collision-free because Movement only emits
+`*_BUTTON_UP` for presses under 0.5 s and `*_LONG_PRESS` at 0.5 s.
+
+### pet_face.c restructured to the spec
+
+Rewrote `pet_face.h` / `pet_face.c` as the working skeleton:
+
+- Tics are stored as integer quarter-tics (0–24) — no floats.
+- Frames are per-position 7-segment masks (`SEG_A | SEG_B ...` for positions
+  0–9, plus colon/indicator flags and a hold time), which is the form the
+  Procreate sketches convert into. A renderer walks the LCD mapping table and
+  lights tied segment pairs if either half is asked for.
+- Animation engine: one playing animation, a 4-deep queue for sequences like
+  wake → mood → poo, and a "rest" that loops the mood animation (the spec's
+  "blink"). Animations without frames yet draw their 6-letter label so the
+  state machine is testable in the simulator before any art exists.
+- Time off-screen is caught up lazily on activate: passive decay, missed-feed
+  penalty, poo arrival, unswept-poo penalty, daily hug-cap reset.
+- Scenes: idle, asleep, night-awake, feeding, playing, dead — with the feed
+  settle/pip timers, the 5 s play window, and the day-part tree from the spec.
+- A debug HUD (top-left scene code, top-right quarter tics) behind
+  `PET_DEBUG_HUD`.
+
+Every tunable is a `#define` at the top of `pet_face.h`. Open questions are
+marked `DECIDE` in the code and unfinished work `TODO`: the animation frames,
+the four sounds, persistence across resets (RTC backup registers), showing the
+food queue, and the spec's ambiguities (poo delay 0.25 vs 2 tic, what triggers
+"Play big", whether missed-day and passive decay stack, when a disturbed pet
+falls back asleep).
+
+Both builds pass on the Mac; `pet_face` verified in the ELF with `nm`.
