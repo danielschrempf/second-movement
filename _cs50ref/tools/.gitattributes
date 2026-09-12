@@ -1,0 +1,9 @@
+# decode.sh runs under WSL and on the Mac. The PC's git has autocrlf=true, which
+# would hand it a CRLF working tree on checkout and break the shebang outright
+# ("bad interpreter"), so pin these to LF.
+#
+# Scoped to this directory on purpose. A repo-wide `* text=auto eol=lf` would
+# renormalise legacy/, lib/TOTP/ and blackjack_face.c, which are genuinely CRLF
+# in the index upstream, into a large spurious diff — see CLAUDE.md.
+*.sh text eol=lf
+*.py text eol=lf
