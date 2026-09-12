@@ -51,16 +51,22 @@
 // line instead so the whole state machine can be tested in the simulator.
 //
 // A frame is the segment mask for each of the ten LCD positions, extra flags,
-// and how many ticks (at PET_ANIM_HZ) to hold it. Classic-LCD position quirks
-// live in _cs50ref/SEGMENT_MAP.md. In short: a segment pair that shares an
-// address (6A+6D, 4A+4D, 1B+1C, 1E+1F, 2A+2D+2G) lights if either half is set.
+// and how many ticks (at PET_ANIM_HZ) to hold it. The face reads SIDEWAYS —
+// the rotated segment geometry and the per-cell quirks are laid out in the
+// frame section of pet_face.h, and the full table is in
+// _cs50ref/SEGMENT_MAP.md. In short: the pet stacks 4, 5, eyes, 6, 7 down the
+// screen, and a segment pair sharing an address (6A+6D, 4A+4D, 1B+1C, 1E+1F,
+// 2A+2D+2G) lights if either half is set.
 //
-// Layout of a table, for reference:
+// Layout of a table, for reference. Note PET_FRAME_COLON carrying the eyes:
+// they are one segment, so open and shut is the only thing they do, and the
+// blink has to come from a frame like this because the classic LCD can't blink
+// them in hardware.
 //
 //   static const pet_frame_t _pet_frames_happy[] = {
-//       //  pos 0     1         2         3         4         5         6            7            8         9        flags  hold
-//       { { SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_B|SEG_C, SEG_B|SEG_C, SEG_NONE, SEG_NONE }, 0, 16 },
-//       { { SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_G,       SEG_G,       SEG_NONE, SEG_NONE }, 0,  2 },
+//       //  pos 0     1         2         3         4         5         6            7         8         9          flags            hold
+//       { { SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_B|SEG_C, SEG_NONE, SEG_NONE, SEG_NONE }, PET_FRAME_COLON, 16 },  // eyes open, flat mouth low
+//       { { SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_B|SEG_C, SEG_NONE, SEG_NONE, SEG_NONE }, 0,                2 },  // eyes shut: the blink
 //   };
 //   ... and in _pet_anims:  [PET_ANIM_HAPPY] = { "HAPPY ", _pet_frames_happy, 2, true },
 
@@ -86,8 +92,9 @@ static const pet_anim_t _pet_anims[PET_ANIM_COUNT] = {
 };
 
 // The poo, once it has been made: drawn on top of every frame until swept.
-// TODO: draw it. Which position(s) it lives in decides what the mood
-// animations have to leave free.
+// TODO: draw it. Sideways, the pet occupies 4, 5, the colon, 6 and 7, which
+// leaves the two small off-axis cells 8 and 9 as the natural home for it —
+// beside the pet rather than on it, and no mood frame has to reserve space.
 static const pet_frame_t _pet_overlay_poo = {
     { SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE }, 0, 0
 };
@@ -150,6 +157,49 @@ static void _pet_add_qt(pet_state_t *s, int16_t delta) {
     if (v < 0) v = 0;
     if (v > PET_QT_DEAD) v = PET_QT_DEAD;
     s->quarter_tics = (uint8_t) v;
+}
+
+// -- Waking time --------------------------------------------------------------
+//
+// Decay is charged in waking seconds, not wall seconds: the pet sleeps
+// PET_HOUR_SLEEP..PET_HOUR_WAKE and nothing accrues against it while it does.
+// Catching up on an arbitrary stretch of time spent off-screen therefore means
+// counting the waking seconds at each end and subtracting.
+
+static uint32_t _pet_local_ts(uint32_t utc_ts) {
+    int32_t offset = movement_get_current_timezone_offset();
+    if (offset < 0) {
+        uint32_t behind = (uint32_t) -offset;
+        return (utc_ts > behind) ? utc_ts - behind : 0;
+    }
+    return utc_ts + (uint32_t) offset;
+}
+
+// Waking seconds from the epoch up to local time local_ts. Monotonic, so the
+// waking seconds in any span are just the difference of its two ends, however
+// many nights fall in between.
+static uint32_t _pet_awake_seconds(uint32_t local_ts) {
+    uint32_t days = local_ts / 86400;
+    uint32_t rem  = local_ts % 86400;
+    uint32_t partial;
+
+    if (rem < (uint32_t) PET_HOUR_WAKE * 3600) {
+        partial = 0;                            // still in last night
+    } else if (rem < (uint32_t) PET_HOUR_SLEEP * 3600) {
+        partial = rem - (uint32_t) PET_HOUR_WAKE * 3600;
+    } else {
+        partial = PET_AWAKE_SECONDS_PER_DAY;    // already gone to bed
+    }
+    return days * (uint32_t) PET_AWAKE_SECONDS_PER_DAY + partial;
+}
+
+// Waking seconds between two UTC timestamps. The current UTC offset is applied
+// to both ends, so a span straddling a DST change is off by one hour, once —
+// at most two thirds of a quarter tic, and only twice a year.
+static uint32_t _pet_awake_between(uint32_t from_ts, uint32_t to_ts) {
+    if (to_ts <= from_ts) return 0;
+    return _pet_awake_seconds(_pet_local_ts(to_ts))
+         - _pet_awake_seconds(_pet_local_ts(from_ts));
 }
 
 // ============================================================================
@@ -244,6 +294,15 @@ static uint8_t _pet_frame_hold(const pet_anim_t *a, uint8_t frame) {
     return a->frames ? a->frames[frame].hold : PET_ANIM_HZ;
 }
 
+// True while a one-shot animation is still on screen. The looping animations
+// (the moods, snore) are the resting state, so they never count as busy.
+// Scene timers use this to wait their turn instead of cutting an animation off
+// part-way — otherwise an eat animation longer than PET_FEED_PIP_SECONDS would
+// be truncated by the next pip.
+static bool _pet_anim_busy(const pet_state_t *s) {
+    return s->anim != PET_ANIM_NONE && !_pet_anims[s->anim].loop;
+}
+
 static void _pet_start_anim(pet_state_t *s, pet_anim_id_t id) {
     s->anim = id;
     s->frame = 0;
@@ -323,14 +382,28 @@ static void _pet_rest(pet_state_t *s) {
 // 5. Simulation
 // ============================================================================
 
-// TODO: persistence. Right now the pet lives in RAM: it survives switching
-// faces and sleep mode, but a reset (battery pull, or the reset button after
-// a reflash) hatches a fresh one. Two RTC backup registers survive reset:
-// claim them once with movement_claim_backup_register() in setup, pack
-// quarter_tics / has_poo / hugs_today / hug_day / woke_day into one and
-// last_update_ts into the other, and read/write them with
-// watch_get_backup_data() / watch_store_backup_data(). A littlefs file
-// (filesystem_write_file) is the option that also survives a battery swap.
+// Persistence: deliberately not implemented. Decided 2026-09-12 after working
+// out what actually threatens the pet's RAM.
+//
+// The state lives in a malloc'd struct, so it survives switching faces and —
+// the part that matters — Movement's low-energy mode, which calls
+// watch_enter_sleep_mode(). That mode disables pins and peripherals but leaves
+// RAM alone. The mode that would wipe it is BACKUP, and watch_enter_backup_mode()
+// is never called anywhere in this firmware (there's also an erratum that makes
+// it impractical on current silicon). So in ordinary daily wear the pet persists
+// indefinitely.
+//
+// What does lose it: a battery pull or a flat battery, a reflash, or a crash.
+// Flashing means taking the watch apart to reach the board, so none of those
+// happen by accident on the wrist — and starting a fresh pet after a battery
+// change is a fair reading of the fiction anyway.
+//
+// If that changes, the two routes are: RTC backup registers 2-6 (claim with
+// movement_claim_backup_register(); survives reset and reflash, not a battery
+// pull; 160 bits total, so the four timestamps have to be stored as
+// minute-resolution offsets from one absolute anchor), or a littlefs file via
+// filesystem_write_file() in the RWWEE area, which survives everything
+// including a battery swap at the cost of flash writes.
 static void _pet_load(pet_state_t *s) {
     (void) s;
 }
@@ -351,21 +424,29 @@ static void _pet_catch_up(pet_state_t *s) {
     if (now < s->last_update_ts) s->last_update_ts = now;
     if (now < s->last_fed_ts)    s->last_fed_ts = now;
     if (now < s->poo_since_ts)   s->poo_since_ts = now;
+    // Same idea for the play cooldown, except the forgiving end is zero: clear
+    // it so the pet can be played with now, rather than parking the cooldown
+    // two hours into a clock that just jumped.
+    if (now < s->last_play_buff_ts) s->last_play_buff_ts = 0;
 
     if (s->quarter_tics < PET_QT_DEAD) {
-        // Passive: +1 tic per 6 h. Whole quarter tics only; the remainder
-        // stays in the timestamp.
-        uint32_t qt = (now - s->last_update_ts) / PET_SECONDS_PER_QT;
+        // Passive: +1 tic per 6 h of waking time. Whole quarter tics only; the
+        // leftover seconds carry in awake_residual, because waking time does
+        // not divide evenly into wall time and rounding it away every visit
+        // would let a diligent owner outrun decay by opening the face often.
+        uint32_t awake = _pet_awake_between(s->last_update_ts, now) + s->awake_residual;
+        uint32_t qt = awake / PET_SECONDS_PER_QT;
+        s->awake_residual = (uint16_t) (awake % PET_SECONDS_PER_QT);
+        s->last_update_ts = now;
         if (qt > 0) {
-            s->last_update_ts += qt * PET_SECONDS_PER_QT;
             if (qt > PET_QT_DEAD) qt = PET_QT_DEAD;
             _pet_add_qt(s, (int16_t) qt);
         }
 
-        // "1 tic every missed day" without eating.
-        // DECIDE: this stacks on top of the passive rate, so a day of total
-        // neglect costs 4 + 1 = 5 tics. Is that the intent, or should the
-        // missed-day rule replace passive decay?
+        // "1 tic every missed day" without eating. Decided 2026-09-12: this
+        // stacks on top of passive decay, so a fully neglected day costs
+        // 4 + 1 = 5 tics. Counted in wall-clock days rather than waking hours —
+        // a missed day is a missed day.
         uint32_t days = (now - s->last_fed_ts) / PET_MISSED_FEED_SECONDS;
         if (days > 0) {
             s->last_fed_ts += days * PET_MISSED_FEED_SECONDS;
@@ -373,26 +454,32 @@ static void _pet_catch_up(pet_state_t *s) {
             _pet_add_qt(s, (int16_t) PET_TIC(days));
         }
 
-        // A poo that was on its way has arrived. Max one at a time.
+        // A poo that was on its way has arrived. Max one at a time. This
+        // countdown is wall clock: digestion doesn't stop overnight, only the
+        // penalty for leaving the result lying there does.
         if (!s->has_poo && s->poo_due_ts != 0 && now >= s->poo_due_ts) {
             s->has_poo = true;
             s->poo_since_ts = s->poo_due_ts;
+            s->poo_residual = 0;
             s->poo_due_ts = 0;
         }
 
-        // An unswept poo keeps adding tics.
+        // An unswept poo keeps adding tics, in waking time like passive decay.
         if (s->has_poo) {
-            uint32_t pqt = (now - s->poo_since_ts) / PET_POO_SECONDS_PER_QT;
+            uint32_t poo_awake = _pet_awake_between(s->poo_since_ts, now) + s->poo_residual;
+            uint32_t pqt = poo_awake / PET_POO_SECONDS_PER_QT;
+            s->poo_residual = (uint16_t) (poo_awake % PET_POO_SECONDS_PER_QT);
+            s->poo_since_ts = now;
             if (pqt > 0) {
-                s->poo_since_ts += pqt * PET_POO_SECONDS_PER_QT;
                 if (pqt > PET_QT_DEAD) pqt = PET_QT_DEAD;
                 _pet_add_qt(s, (int16_t) pqt);
             }
         }
     }
 
-    // DECIDE: the hug cap ("up to -1.0 tic, 0.25 at a time") resets with the
-    // calendar day here. Per visit would let you leave and come back for more.
+    // Decided 2026-09-12: the hug cap ("up to -1.0 tic, 0.25 at a time") resets
+    // with the calendar day. Per visit would be trivially gamed by switching
+    // face and coming straight back for four more hugs.
     if (s->hug_day != local.unit.day) {
         s->hug_day = local.unit.day;
         s->hugs_today = 0;
@@ -420,9 +507,9 @@ static void _pet_disturb(pet_state_t *s) {
 
 static void _pet_fall_asleep(pet_state_t *s) {
     s->scene = PET_SCENE_ASLEEP;
-    // DECIDE: the snore sound plays once when the pet nods off. Loop it with
-    // the animation instead? (Would need a callback or a tick-based retrigger.)
-    _pet_play_sound(PET_SOUND_SNORE);
+    // Zero means "snore on the next tick"; _pet_tick handles the repeat from
+    // there, so every route into sleep sounds the same.
+    s->snore_ticks = 0;
     _pet_rest(s);
 }
 
@@ -452,6 +539,8 @@ static void _pet_feed_press(pet_state_t *s) {
 }
 
 static void _pet_feed_tick(pet_state_t *s) {
+    // Let the eat animation finish before the timer moves on to the next pip.
+    if (_pet_anim_busy(s)) return;
     if (s->feed_ticks > 0) {
         s->feed_ticks--;
         return;
@@ -481,7 +570,8 @@ static void _pet_hug(pet_state_t *s) {
         s->hugs_today++;
         _pet_add_qt(s, -PET_BUFF_HUG);
     }
-    // DECIDE: past the cap the pet still gets kissed, it just doesn't help.
+    // Decided 2026-09-12: past the cap the pet still gets kissed, it just
+    // doesn't help. A button that silently does nothing reads as broken.
     _pet_play_sound(PET_SOUND_KISS);
     _pet_start_anim(s, PET_ANIM_KISS);
 }
@@ -490,11 +580,19 @@ static void _pet_hug(pet_state_t *s) {
 // night without waking the pet.
 static void _pet_sweep(pet_state_t *s) {
     if (s->scene == PET_SCENE_DEAD) return;
+    bool had_something = s->has_poo || s->poo_due_ts != 0;
     s->has_poo = false;
     s->poo_due_ts = 0;
+    s->poo_residual = 0;
     s->overlay = NULL;
-    // DECIDE: there's no sweep animation in the checklist. Just redraw for now.
-    _pet_draw(s);
+    // There's no sweep animation in the checklist, so the acknowledgement is
+    // the mood animation restarting from frame 0 — enough to show the press
+    // landed. Not while the pet is asleep: that would cut off the snoring.
+    if (had_something && s->scene != PET_SCENE_ASLEEP) {
+        _pet_start_anim(s, _pet_mood_anim(_pet_mood(s)));
+    } else {
+        _pet_draw(s);
+    }
 }
 
 static void _pet_resurrect(pet_state_t *s) {
@@ -503,9 +601,18 @@ static void _pet_resurrect(pet_state_t *s) {
     s->quarter_tics = 0;
     s->last_update_ts = now;
     s->last_fed_ts = now;
-    // DECIDE: does the poo survive death? Cleared here.
+    s->awake_residual = 0;
+    // Decided 2026-09-12: the poo does not survive death. The spec resets the
+    // tics to 0, so resurrection is a clean slate, not an inherited mess.
     s->has_poo = false;
     s->poo_due_ts = 0;
+    s->poo_residual = 0;
+    // A resurrected pet gets its hugs back too, otherwise coming back on the
+    // same day-of-month you last hugged it would leave the cap already spent.
+    // Likewise the play cooldown: a pet brought back to life should be playable
+    // straight away, not two hours from now.
+    s->hugs_today = 0;
+    s->last_play_buff_ts = 0;
     s->scene = PET_SCENE_IDLE;
     _pet_start_anim(s, PET_ANIM_RESURRECT);   // then rests into the mood ("blink")
 }
@@ -519,10 +626,20 @@ static void _pet_on_motion(pet_state_t *s) {
     }
     if (_pet_blocked(s)) return;
 
+    uint32_t now = _pet_now();
     s->scene = PET_SCENE_PLAYING;
     s->nausea = 0;
     s->play_ticks = PET_PLAY_WINDOW_SECONDS * PET_ANIM_HZ;
-    _pet_add_qt(s, -PET_BUFF_PLAY);
+
+    // The pet always plays along — the animation is the point — but the buff
+    // only lands once per PET_PLAY_COOLDOWN_SECONDS. Play was otherwise the
+    // one uncapped source of relief, and a shake every five seconds healed the
+    // pet from death's door in a minute flat.
+    s->play_buffed = (now - s->last_play_buff_ts) >= PET_PLAY_COOLDOWN_SECONDS;
+    if (s->play_buffed) {
+        s->last_play_buff_ts = now;
+        _pet_add_qt(s, -PET_BUFF_PLAY);
+    }
     _pet_start_anim(s, PET_ANIM_PLAY_SMALL);
 }
 
@@ -533,12 +650,19 @@ static void _pet_play_tick(pet_state_t *s) {
     }
     s->scene = PET_SCENE_IDLE;
     if (s->nausea > PET_NAUSEA_LIMIT) {
-        // DECIDE: does barfing cost anything — undo the play buff, add a tic?
+        // Decided 2026-09-12: barfing hands back the play buff just earned and
+        // costs PET_DEBUFF_BARF on top, so shaking the watch senseless ends up
+        // worse than never having played at all. Only give back a buff that was
+        // actually granted — a session inside the cooldown earned nothing to
+        // lose. The cooldown itself stays spent: a pet that has just been made
+        // sick is not in the mood to play again.
+        _pet_add_qt(s, (s->play_buffed ? PET_BUFF_PLAY : 0) + PET_DEBUFF_BARF);
         _pet_play_sound(PET_SOUND_BARF);
         _pet_start_anim(s, PET_ANIM_BARF);
     } else if (s->nausea > 0) {
-        // DECIDE: nothing in the spec triggers PLAY_BIG. Guessed: a lively
-        // session that stayed under the nausea limit.
+        // Decided 2026-09-12: nothing in the spec says what triggers PLAY_BIG,
+        // so it's a session with some shaking in it that stayed under the
+        // nausea limit — the reward for playing enthusiastically but not madly.
         _pet_start_anim(s, PET_ANIM_PLAY_BIG);
     } else {
         _pet_rest(s);
@@ -558,6 +682,7 @@ static void _pet_enter(pet_state_t *s) {
     s->queue_len = 0;
     s->food_queue = 0;
     s->nausea = 0;
+    s->play_buffed = false;
     s->overlay = NULL;
 
     pet_mood_t mood = _pet_mood(s);
@@ -587,13 +712,15 @@ static void _pet_enter(pet_state_t *s) {
         case PET_DAYPART_NIGHT:
             // static poo, snore
             s->scene = PET_SCENE_ASLEEP;
+            s->snore_ticks = 0;     // snore on the next tick
             break;
     }
     if (!_pet_start_next_queued(s)) _pet_rest(s);
 }
 
-// While the face stays open across a day-part boundary: nod off at 21:00,
-// wake at 05:00. DECIDE: the spec only describes what happens on entry.
+// While the face stays open across a day-part boundary: nod off at 21:00, wake
+// at 05:00. The spec only describes what happens on entry; decided 2026-09-12
+// that watching the pet go to bed is better than seeing it frozen awake.
 static void _pet_check_daypart(pet_state_t *s) {
     watch_date_time_t local = movement_get_local_date_time();
     bool night = _pet_daypart(local.unit.hour) == PET_DAYPART_NIGHT;
@@ -616,6 +743,16 @@ static void _pet_tick(pet_state_t *s, uint8_t subsecond) {
             break;
         case PET_SCENE_NIGHT_AWAKE:
             if (s->night_awake_ticks > 0 && --s->night_awake_ticks == 0) _pet_fall_asleep(s);
+            break;
+        case PET_SCENE_ASLEEP:
+            // Snore on a timer rather than once on nodding off, so the pet is
+            // audibly asleep the whole time you're looking at it.
+            if (s->snore_ticks == 0) {
+                _pet_play_sound(PET_SOUND_SNORE);
+                s->snore_ticks = PET_SNORE_PERIOD_SECONDS * PET_ANIM_HZ;
+            } else {
+                s->snore_ticks--;
+            }
             break;
         default:
             break;
@@ -704,8 +841,12 @@ bool pet_face_loop(movement_event_t event, void *context) {
             break;
 
         case EVENT_TIMEOUT:
-            // DECIDE: after a minute of no buttons, go back to the clock. Staying
-            // here would keep the 8 Hz tick and the 400 Hz accelerometer running.
+            // Decided 2026-09-12: when Movement calls time (the inactivity
+            // deadline is a user setting — 60, 120, 300 or 1800 s), go back to
+            // the clock. Staying would keep the 8 Hz tick and the 400 Hz
+            // accelerometer running. This is also what stops the pet being
+            // shaken awake all night by an arm rolling over in bed: resigning
+            // turns tap detection off, so no wrist movement can reach it.
             movement_move_to_face(0);
             break;
         case EVENT_LOW_ENERGY_UPDATE:

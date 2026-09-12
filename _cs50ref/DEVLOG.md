@@ -331,3 +331,237 @@ food queue, and the spec's ambiguities (poo delay 0.25 vs 2 tic, what triggers
 falls back asleep).
 
 Both builds pass on the Mac; `pet_face` verified in the ELF with `nm`.
+
+---
+
+## Session 5 — 2026-09-12 — Orientation settled: the face reads sideways
+
+### Triage of the open questions
+
+Came back to the project and took stock. Hardware build is green on the PC
+(GCC 14.2 in WSL): 131,744 text + 2,044 data = 133,788 of the 245,760 byte
+budget, ~54%, with `pet_face` verified in the ELF. Nothing is broken; what
+remains is decisions and art.
+
+Sorting the `TODO` / `DECIDE` markers by what they block put one item on top
+that wasn't tracked in the code at all — the Session 3 "sideways vs upright"
+question, which lived only in this devlog as "decision pending" while gating
+every animation table and the poo overlay.
+
+A few balance findings came out of the same pass, now recorded for later:
+
+- **Passive decay never pauses overnight.** `_pet_catch_up` is pure wall clock
+  with no day-part check, but the pet sleeps 21:00–05:00 and any interaction
+  then costs +0.25 with no buff. So the pet accrues 5.3 of its 24 quarter-tics
+  every night with no way to offset them. Nothing in the spec addresses this.
+- The **poo delay contradiction** (`0.25 tic after every feed` vs
+  `poo countdown (2 tic)`) is the highest-leverage number in the file: an
+  unswept poo doubles the decay rate, so at the current 1.5 h a fed-then-
+  abandoned pet dies in ~19 h instead of the ~36 h pure passive decay implies.
+- **Barfing costs nothing**, which leaves the nausea counter with no teeth.
+- Backup registers 0–6 are all free — no other face in `movement_config.h`
+  claims any — so persistence is unblocked work. Note that
+  `movement_claim_backup_register()` returns `0` on exhaustion, which is also a
+  valid register number, so the result can't be error-checked; claim early.
+
+### The decision: sideways
+
+Dan's call — the animations are all drawn for the rotated face and upright was
+never really in play. So the watch is read turned 90° clockwise: the pet stacks
+`4, 5, (colon = eyes), 6, 7` down the screen, with the small `8` and `9` off to
+one side.
+
+Wrote the consequences into the places that need them rather than leaving them
+in a doc nobody reads while authoring frames:
+
+- [pet_face.h](../watch-faces/complication/pet_face.h) now carries the rotated
+  segment geometry beside the upright bit names (`A` is the right vertical, `D`
+  the left, `G` the centre, `E`/`F` the top edge, `C`/`B` the bottom), the handy
+  mouth shapes, and the per-cell quirks that constrain the art.
+- The example frame table in [pet_face.c](../watch-faces/complication/pet_face.c)
+  was recast sideways and now shows `PET_FRAME_COLON` carrying the eyes.
+- The poo overlay `TODO` narrowed: 8 and 9 are the natural home, beside the pet
+  rather than on it, so no mood frame has to reserve space for it.
+- [SEGMENT_MAP.md](SEGMENT_MAP.md) records the decision at the head of the
+  sideways section.
+
+Two hardware findings fell out of writing that up, both specific to the sideways
+design. The colon — now the eyes — is the one element on the classic LCD that
+*cannot* blink autonomously, so every blink in the spec is a CPU-drawn frame and
+the pet stops blinking in sleep mode. And position 7, the only position that
+*can* blink in hardware (and keeps going in STANDBY, which is tempting for
+snoring), takes a **character**, not a segment mask, from a fixed list of shapes
+that avoid its segment B — so using it means giving that cell over entirely.
+
+Next: converting the Procreate Dreams sketches into frame tables, which needs
+the sketches in a readable form. Persistence is the parallel track that needs no
+decisions.
+
+### Every spec ambiguity settled
+
+Worked through the whole `DECIDE` list in one pass. There are now **zero** left
+in the face — what remains is `TODO`s, i.e. work rather than questions.
+
+The four that changed the game:
+
+- **Decay pauses overnight.** Neither passive decay nor an unswept poo accrues
+  between 21:00 and 05:00. You are not neglecting a pet that is in bed, and the
+  +0.25 disturb penalty already covers waking it. The daily cost drops from 16
+  quarter-tics to 10.7, and a fully ignored pet now dies in 38–46 h of wall
+  clock instead of 30 — the spread depends on what time you abandoned it, since
+  walking away at 21:00 buys it a free night.
+- **The poo delay is 12 h**, resolving the spec's contradiction in favour of
+  Feed()'s explicit "poo countdown (2 tic)" over the Buffs list's "0.25 tic
+  after every feed". At 1.5 h a poo was on screen practically whenever you had
+  fed, and since an unswept poo doubles the decay rate, feeding at 20:00 cost
+  +5 against the −4 the food gave: the pet was better off not being fed in the
+  evening. At 12 h the same feed lands its poo at 08:00 the next morning.
+- **Barfing costs.** Shaking past `PET_NAUSEA_LIMIT` now hands back the play
+  buff and adds another 0.25 on top, so over-shaking ends up a quarter-tic worse
+  than never having played. Previously the nausea counter had no teeth at all —
+  the punishment for shaking the watch senseless was an animation.
+- **The missed-day penalty keeps stacking** on passive decay, the literal
+  reading of the spec and a 25% surcharge for not feeding at all in 24 h.
+
+The rest, recorded inline at the point each applies: the hug cap resets on the
+calendar day (per-visit would be gamed by switching face and coming back); the
+pet is still kissed past the cap, because a button that silently does nothing
+reads as broken; poo does not survive death; `PLAY_BIG` rewards a lively session
+that stayed under the nausea limit; the pet nods off and wakes while you watch
+if the face is open across the boundary; and the inactivity timeout still
+returns to the clock.
+
+That last one turned out to be load-bearing rather than cosmetic: resigning the
+face is what disables tap detection, so it is the only reason an arm rolling
+over in bed can't shake the pet awake all night. Worth remembering before anyone
+"improves" the face by making it stay put. (The deadline is a user setting —
+60, 120, 300 or 1800 s — not the fixed minute the old comment claimed.)
+
+### Implementation notes
+
+Decay is now charged in **waking seconds** rather than wall seconds, which needs
+a little care since the two don't divide evenly. `_pet_awake_seconds(t)` returns
+the waking seconds from the epoch to local time `t`; it's monotonic, so the
+waking time in any span is just the difference of its ends, however many nights
+fall in between. Leftover seconds that don't add up to a whole quarter tic carry
+in `awake_residual` / `poo_residual` instead of being rounded away — otherwise
+a diligent owner could outrun decay just by opening the face often.
+
+Validated the accounting against a standalone harness before trusting it: ten
+hand-checked spans (whole days, all-night spans, spans straddling both
+boundaries), plus monotonicity and additivity over 400 generated spans. All
+pass. The one known inaccuracy is a span straddling a DST change, which applies
+the current UTC offset to both ends and so is off by an hour, once — at most two
+thirds of a quarter tic, twice a year.
+
+Two latent bugs fixed while in there. An eat animation longer than
+`PET_FEED_PIP_SECONDS` would have been truncated by the next pip, so scene
+timers now wait on `_pet_anim_busy()` rather than cutting a one-shot animation
+off part-way. And a pet resurrected on the same day-of-month it was last hugged
+would have found its hug cap already spent, since `hug_day` only stores the day
+of the month; resurrection now resets the hug count along with everything else.
+
+Snoring moved from a single beep on nodding off to a repeat every
+`PET_SNORE_PERIOD_SECONDS`, so the pet is audibly asleep the whole time you're
+watching it. Sweeping restarts the mood animation as an acknowledgement, since
+the checklist has no sweep animation — except while the pet is asleep, where
+that would cut off the snore.
+
+Hardware and simulator builds both pass: 132,048 text + 2,044 data = 134,092,
+up 304 bytes on the session's starting point, 55% of the flash budget.
+
+### The play exploit, and what the balance actually feels like
+
+Found one more hole while checking the finished numbers: **play was farmable.**
+`_pet_on_motion` granted the full −0.5 tic every time a new 5 s window opened,
+and a single shake per window never accumulates nausea — so shake, wait five
+seconds, shake, and the pet went from death's door to blissful in about a
+minute, no barf, no penalty. Hugs are capped and feeding is self-limited by poo;
+play was the one uncapped source of relief, which made the whole mood meter
+optional for anyone who noticed.
+
+Fixed with a **2 h cooldown on the buff, not on the interaction**: the pet always
+plays along and the animation always runs, but the tics only come off once per
+cooldown. That keeps shaking spontaneous and always available — it's the fun
+one — while capping it at ~8 buffs per waking day. Barfing gives back only a
+buff that was actually granted, and leaves the cooldown spent: a pet that has
+just been made sick isn't in the mood to go again.
+
+Then simulated a week of care against the finished rules, which is the only way
+to answer "is this actually playable". Quarter tics at 23:00 each day, death at
+24:
+
+```text
+                                    d1 d2 d3 d4 d5 d6 d7
+  3/day, feed at 08:00 (morning)      5  6  6  7  8  8  9   healthy
+  3/day, feed at 13:00 (midday)       3  5  5  6  7  7  8   healthy
+  3/day, feed at 19:00 (evening)      1  5  5  6  7  7  8   healthy
+  2/day (08:00, 19:00), feed morning  7 10 12 15 18 24 24   DEAD (day 6)
+  2/day (08:00, 19:00), feed evening  3  7  9 12 15 17 24   DEAD (day 7)
+  1/day (evening only)                1 14 24 24 24 24 24   DEAD (day 3)
+  no care at all                      9 24 24 24 24 24 24   DEAD (day 2)
+```
+
+Reading it: three interactions a day is the sustainable routine, and it
+**converges** rather than drifting — the pet sits near 0 (Happy) whenever you
+actually look at it, and the 8–9 in the table is its worst moment, late evening
+after the longest gap, just into Confused. Two a day is survivable for most of a
+week and then isn't. Feeding late beats feeding early by about a tic a day,
+because a morning feed drops its poo at 20:00, after the last check-in, where it
+sits until morning.
+
+That is a demanding pet, deliberately: it comes straight out of the spec's own
+numbers (1 tic per 6 h, dead at 6 tics). The sleep pause already took it from
+"dies in 30 h" to "dies in 38–46 h". If it wants softening later the dials are
+the hug cap, the play cooldown, and the poo rate — in that order, since the poo
+rate is the one the spec actually pins down ("adds +1 tic every 1 tic").
+
+Hardware and simulator builds both pass: 132,144 text + 2,044 data = 134,188,
+55% of the flash budget, ~108 KB free.
+
+### Why the pet is demanding, on purpose
+
+Dan's call on the difficulty above, and the reasoning is better than
+"spec-faithful": **the difficulty is the content.** There are fourteen
+animations in the checklist, and a pet that is comfortably Happy all week only
+ever shows you one of them. A pet that drifts through Confused, Upset and Angry
+between check-ins — and occasionally dies and gets resurrected — is the one that
+actually exercises the art. Neglect is how the animation range gets seen.
+
+So the balance stays where the week simulation put it: three interactions a day
+to hold steady, two survives most of a week, one is fatal by day three. No
+softening. If anything the mood thresholds are the interesting dial later —
+they control how much of the range you see per unit of neglect, independently of
+how fast the pet dies.
+
+### Persistence: not needed, and here's the proof
+
+Raised persistence as the obvious next piece of work, then Dan questioned the
+premise — flashing this watch means taking it apart, so how often does the pet
+really get reset? Checking properly, the answer is: almost never.
+
+The pet's state is a `malloc`'d struct in RAM. RAM survives switching faces, and
+— the part that matters — it survives Movement's low-energy mode, which calls
+`watch_enter_sleep_mode()`. That mode disables pins and peripherals but leaves
+RAM intact. The mode that *would* wipe it is BACKUP, which the library documents
+as turning "off the RAM, obliterating your application's state" — and
+`watch_enter_backup_mode()` is never called anywhere in this firmware. There's
+also an erratum (Reference: 15010) that makes BACKUP impractical on current
+SAM L22 silicon, so nothing is likely to start calling it.
+
+So the pet is lost only to a battery pull, a flat battery, a reflash, or a
+crash. Reaching the reset button means opening the case; there is a software
+route to the bootloader (`shell_cmd_list.c` has a "reboot to UF2 bootloader"
+command) but the shell runs over USB, so that needs the case open too. None of
+it happens by accident on the wrist, and hatching a fresh pet after a battery
+change is a fair reading of the fiction.
+
+Decision: **no persistence.** The `TODO` is gone; `_pet_load` / `_pet_save` stay
+as no-op hooks with the reasoning recorded at the definition, along with the two
+routes if it ever changes (backup registers 2-6 — five, not the seven claimed
+earlier today, since Movement reserves 0 and 1 — or a littlefs file in RWWEE).
+
+Worth noting how close this came to being a day of work on a non-problem. The
+`TODO` had been sitting in the file since Session 4 asserting that "a reset
+hatches a fresh one", which is true but says nothing about how often a reset
+happens. Checking the frequency rather than the mechanism is what killed it.

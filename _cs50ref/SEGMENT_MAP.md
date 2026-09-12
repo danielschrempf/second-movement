@@ -48,7 +48,12 @@ SIGNAL "fan" lights as a unit.
   still, in the top row. The colon sits between positions 5 and 6.
 - Digit shapes are italic/slanted — sideways faces will have a slight lean.
 
-## If the face reads sideways (rotated 90° clockwise, position 4 at top)
+## The face reads sideways (rotated 90° clockwise, position 4 at top)
+
+**Decided 2026-09-12 — this is the orientation.** Dan's animations are all drawn
+for it, and the upright alternative is off the table. The rest of this section is
+the working reference for authoring frames; the comparison at the end is kept
+only to record why.
 
 Reading top-to-bottom becomes: 4, 5, **colon (eyes)**, 6, 7, then the small 8, 9.
 The old top row (weekday, day, indicators) becomes a right-hand column.
@@ -79,8 +84,17 @@ The colon-as-eyes trade-off, stated plainly: **eyes gain nothing but position
 (they're a fixed pair of dots that can only blink together), and the mouth gains
 everything** — a full 7-segment cell (or two) of expression range. The upright
 alternative keeps expressive eyes (6–7) but limits the mouth to the small 8–9
-digits. Pick per art direction, not capability — both are buildable with the
-same frame engine, which just maps masks to (com, seg) pixels either way.
+digits. Both were buildable on the same frame engine, which maps masks to
+(com, seg) pixels either way, so this was an art-direction call rather than a
+capability one — and it went to sideways.
+
+One consequence to design around: the colon is the one thing on the classic LCD
+that **cannot** blink autonomously (`watch_start_indicator_blink_if_possible`
+does nothing for it here). Since the colon is the eyes, every blink in the spec
+is a CPU-drawn frame at `PET_ANIM_HZ`, and the pet cannot keep blinking once the
+watch drops into sleep mode. Position 7 *can* blink in hardware and would keep
+going in STANDBY — but only as a whole character from a fixed list, not as a
+mask, so using it means handing that cell to the hardware entirely.
 
 ## Frame notation, with worked examples
 
