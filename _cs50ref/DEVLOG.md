@@ -784,3 +784,40 @@ at the GIF decode pipeline, which is otherwise only findable by reading back
 through Session 6.
 
 Both targets build clean, `PET_DEBUG_CONTROLS` at 0 included.
+
+### The tooling was living in a temp directory
+
+Caught this before losing it: everything built this session to validate the
+design — the GIF decoder, the calibration, the three check harnesses — existed
+only in the session's scratch directory, which is temporary and outside the repo.
+About 640 lines of working code, none of it committed, including the calibration
+coordinates that took the most effort to establish.
+
+Now in `_cs50ref/tools/`:
+
+| | |
+| --- | --- |
+| `decode.sh`, `decode.py`, `segmap.c` | GIF → `pet_frame_t` table, with `--check` for the tied-segment report |
+| `check_layers.c` | no two layers claim the same segment |
+| `check_awake_time.c` | the waking-seconds maths is monotonic and additive |
+| `check_balance.c` | a week of simulated care at different check-in rates |
+
+Two things needed solving to package the decoder. It had been run as a pile of
+ad-hoc commands, so it became one script — which immediately exposed that
+**neither shell on the PC has the whole toolchain**: `ffmpeg` is installed
+Windows-side, the compiler and `python3` are in WSL. The fix is that WSL can
+invoke `ffmpeg.exe` directly, provided the scratch directory sits on `/mnt/d`
+where both sides can see it and paths go through `wslpath -w`. `decode.sh`
+detects which case it is in, so it also just runs on the Mac.
+
+Packaging also surfaced a real bug. The first decode run put four components in
+positions `2H` and `3H`, which should not exist — positions 2 through 9 have no H
+segment at all. The cell boundaries for 2 and 3 had been estimated rather than
+derived, and the segments belonged to position 3. With that corrected the food
+pips decode as `3B 3C 3E 3F` — exactly the four specified in the region map,
+found independently — and the pose count goes from 149 to **151**. The earlier
+figure was wrong.
+
+The checks copy their constants from the firmware rather than including it, so a
+tunable changed in `pet_face.h` won't fail them until it is changed in both. The
+README says so, and says when to re-run each.

@@ -15,10 +15,11 @@ been settled, with the reasoning recorded where it applies; `TODO` in
 `pet_face.c` marks the work still outstanding.
 
 Animations are drawn as segment art on an F-91W template and exported as GIFs.
-They are not transcribed by hand: the frames rotate back to the native layout,
-which locates every segment geometrically and decodes to masks. `ffmpeg` splits
-the GIF (reading one directly only ever yields its first frame). See the
-Session 6 devlog entry for the pipeline and its calibration.
+They are not transcribed by hand — `_cs50ref/tools/decode.sh` converts one into
+a paste-ready `pet_frame_t` table, and `--check` reports any frame that lights
+half of a tied segment pair and so can't render as drawn. That directory also
+holds the harnesses for the layer regions, the waking-time maths and the balance
+simulation; [its README](_cs50ref/tools/README.md) says when to re-run each.
 
 Development happens on two machines — a Windows 11 PC (primary) and a Mac.
 
