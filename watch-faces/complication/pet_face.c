@@ -70,33 +70,61 @@
 //   };
 //   ... and in _pet_anims:  [PET_ANIM_HAPPY] = { "HAPPY ", _pet_frames_happy, 2, true },
 
-static const pet_anim_t _pet_anims[PET_ANIM_COUNT] = {
-    //                          label     frames  count  loop
-    [PET_ANIM_NONE]       = { "      ",  NULL,   0,     false },
-    // moods: loop while the pet rests
-    [PET_ANIM_HAPPY]      = { "HAPPY ",  NULL,   0,     true  },
-    [PET_ANIM_CONFUSED]   = { "CONFUS",  NULL,   0,     true  },
-    [PET_ANIM_UPSET]      = { "UPSET ",  NULL,   0,     true  },
-    [PET_ANIM_ANGRY]      = { "ANGRY ",  NULL,   0,     true  },
-    [PET_ANIM_DEAD]       = { "DEAD  ",  NULL,   0,     true  },
-    // one-shots
-    [PET_ANIM_RESURRECT]  = { "GHOST ",  NULL,   0,     false },
-    [PET_ANIM_POO]        = { "POO   ",  NULL,   0,     false },
-    [PET_ANIM_PLAY_SMALL] = { "PLAY 1",  NULL,   0,     false },
-    [PET_ANIM_PLAY_BIG]   = { "PLAY 2",  NULL,   0,     false },
-    [PET_ANIM_BARF]       = { "BARF  ",  NULL,   0,     false },
-    [PET_ANIM_EAT]        = { "EAT   ",  NULL,   0,     false },
-    [PET_ANIM_KISS]       = { "KISS  ",  NULL,   0,     false },
-    [PET_ANIM_SNORE]      = { "SNORE ",  NULL,   0,     true  },
-    [PET_ANIM_WAKE]       = { "WAKE  ",  NULL,   0,     false },
+// What each layer is allowed to light. Anything a frame sets outside its own
+// cells is masked off by the compositor, so one stray segment in the art can't
+// invade a neighbour. Position 9 is the shared one: the character has its top
+// edge and both verticals, the status layer the centre and bottom.
+static const pet_layer_def_t _pet_layers[PET_LAYER_COUNT] = {
+    [PET_LAYER_CHARACTER] = {
+        //   0     1     2     3     4     5     6     7     8    9 (partial)
+        { 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+          SEG_A | SEG_D | SEG_E | SEG_F },
+        PET_FRAME_COLON,
+    },
+    [PET_LAYER_STATUS] = {
+        { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+          SEG_G | SEG_B | SEG_C },
+        0,
+    },
 };
 
-// The poo, once it has been made: drawn on top of every frame until swept.
-// TODO: draw it. Sideways, the pet occupies 4, 5, the colon, 6 and 7, which
-// leaves the two small off-axis cells 8 and 9 as the natural home for it —
-// beside the pet rather than on it, and no mood frame has to reserve space.
-static const pet_frame_t _pet_overlay_poo = {
-    { SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE }, 0, 0
+// The food pips, lit in this order as the queue fills. Sideways these four
+// segments of position 3 read as a 2x2 block: bottom right, bottom left, top
+// right, top left.
+static const uint8_t _pet_food_pips[PET_FOOD_MAX] = { SEG_B, SEG_C, SEG_F, SEG_E };
+
+// Poo: sideways, G is the centre vertical and B|C the bottom edge — a stem
+// standing on a base. It just sits there until swept, so one frame that loops.
+static const pet_frame_t _pet_frames_poo[] = {
+    //  0  1  2  3  4  5  6  7  8  9                                flags  hold
+    { { 0, 0, 0, 0, 0, 0, 0, 0, 0, SEG_G | SEG_B | SEG_C },            0,  PET_ANIM_HZ },
+};
+
+// Barf: the base without the stem — a puddle rather than a pile.
+static const pet_frame_t _pet_frames_barf[] = {
+    { { 0, 0, 0, 0, 0, 0, 0, 0, 0, SEG_B | SEG_C },                    0,  PET_ANIM_HZ * 2 },
+};
+
+static const pet_anim_t _pet_anims[PET_ANIM_COUNT] = {
+    //                          label     frames              count  loop   layer
+    [PET_ANIM_NONE]       = { "      ",  NULL,                0,     false, PET_LAYER_CHARACTER },
+    // moods: loop while the pet rests
+    [PET_ANIM_HAPPY]      = { "HAPPY ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
+    [PET_ANIM_CONFUSED]   = { "CONFUS",  NULL,                0,     true,  PET_LAYER_CHARACTER },
+    [PET_ANIM_UPSET]      = { "UPSET ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
+    [PET_ANIM_ANGRY]      = { "ANGRY ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
+    [PET_ANIM_DEAD]       = { "DEAD  ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
+    // one-shots
+    [PET_ANIM_RESURRECT]  = { "GHOST ",  NULL,                0,     false, PET_LAYER_CHARACTER },
+    [PET_ANIM_PLAY_SMALL] = { "PLAY 1",  NULL,                0,     false, PET_LAYER_CHARACTER },
+    [PET_ANIM_PLAY_BIG]   = { "PLAY 2",  NULL,                0,     false, PET_LAYER_CHARACTER },
+    [PET_ANIM_EAT]        = { "EAT   ",  NULL,                0,     false, PET_LAYER_CHARACTER },
+    [PET_ANIM_KISS]       = { "KISS  ",  NULL,                0,     false, PET_LAYER_CHARACTER },
+    [PET_ANIM_SNORE]      = { "SNORE ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
+    [PET_ANIM_WAKE]       = { "WAKE  ",  NULL,                0,     false, PET_LAYER_CHARACTER },
+    // the status layer: what's on the floor, drawn beside the pet in cell 9
+    [PET_ANIM_POO]        = { "POO   ",  _pet_frames_poo,     1,     true,  PET_LAYER_STATUS },
+    [PET_ANIM_BARF]       = { "BARF  ",  _pet_frames_barf,    1,     false, PET_LAYER_STATUS },
 };
 
 // TODO: compose the four sounds. Format: note, duration, note, duration, ...,
@@ -115,8 +143,12 @@ static int8_t *_pet_sounds[PET_SOUND_COUNT] = {
     [PET_SOUND_EAT]   = _pet_sound_eat,
 };
 
-static void _pet_play_sound(pet_sound_id_t id) {
+// Every sound goes through here, so this is also where the SIGNAL indicator
+// gets flashed: the watch is often kept silent, and a pet whose whole
+// personality is sound would otherwise lose half of itself.
+static void _pet_play_sound(pet_state_t *s, pet_sound_id_t id) {
     movement_play_sequence(_pet_sounds[id], BUZZER_PRIORITY_SIGNAL);
+    s->signal_ticks = PET_FLASH_TICKS;
 }
 
 // ============================================================================
@@ -233,59 +265,64 @@ static void _pet_draw_flags(uint8_t flags) {
     if (flags & PET_FRAME_LAP)    watch_set_indicator(WATCH_INDICATOR_LAP);    else watch_clear_indicator(WATCH_INDICATOR_LAP);
 }
 
-#if PET_DEBUG_HUD
-static const char *_pet_scene_codes[] = {
-    [PET_SCENE_IDLE]        = "ID",
-    [PET_SCENE_ASLEEP]      = "SL",
-    [PET_SCENE_NIGHT_AWAKE] = "NA",
-    [PET_SCENE_FEEDING]     = "FD",
-    [PET_SCENE_PLAYING]     = "PL",
-    [PET_SCENE_DEAD]        = "DD",
-};
-#endif
-
-// Draw the current frame of the current animation, the poo overlay, and the HUD.
+// Composite every layer into one framebuffer and push it to the LCD.
+//
+// Each layer contributes only the segments it owns — a frame's stray bits are
+// masked off rather than trusted — so the layers can be drawn, timed and
+// changed completely independently of each other. The food pips and the
+// transient marks aren't animations at all; they're a direct read of state.
 static void _pet_draw(const pet_state_t *s) {
-    const pet_anim_t *a = &_pet_anims[s->anim];
+    uint8_t fb[10] = { 0 };
+    uint8_t flags = 0;
+    const char *label = NULL;
 
-    if (a->frames == NULL) {
-        // No art yet: the label stands in for the animation.
-        watch_clear_display();
-        watch_display_text(WATCH_POSITION_BOTTOM, a->label);
-        if (s->overlay) {
-            for (uint8_t p = 0; p < 10; p++) {
-                if (s->overlay->seg[p]) _pet_draw_position(p, s->overlay->seg[p]);
-            }
-            _pet_draw_flags(s->overlay->flags);
+    for (uint8_t l = 0; l < PET_LAYER_COUNT; l++) {
+        const pet_anim_t *a = &_pet_anims[s->layer[l].anim];
+        if (s->layer[l].anim == PET_ANIM_NONE) continue;
+        if (a->frames == NULL) {
+            // No art for this one yet. The character's label stands in below;
+            // any other layer simply draws nothing.
+            if (l == PET_LAYER_CHARACTER) label = a->label;
+            continue;
         }
-    } else {
-        const pet_frame_t *f = &a->frames[s->frame];
-        uint8_t flags = f->flags;
-        for (uint8_t p = 0; p < 10; p++) {
-            uint8_t mask = f->seg[p];
-            if (s->overlay) mask |= s->overlay->seg[p];
-            _pet_draw_position(p, mask);
-        }
-        if (s->overlay) flags |= s->overlay->flags;
-        _pet_draw_flags(flags);
+        const pet_frame_t *f = &a->frames[s->layer[l].frame];
+        const pet_layer_def_t *d = &_pet_layers[l];
+        for (uint8_t p = 0; p < 10; p++) fb[p] |= f->seg[p] & d->seg[p];
+        flags |= f->flags & d->flags;
     }
 
-#if PET_DEBUG_HUD
-    char buf[4];
-    watch_display_text(WATCH_POSITION_TOP_LEFT, _pet_scene_codes[s->scene]);
-    snprintf(buf, sizeof(buf), "%2d", s->quarter_tics);
-    watch_display_text(WATCH_POSITION_TOP_RIGHT, buf);
-#endif
+    // Food pips: however many are queued, lit in order.
+    for (uint8_t i = 0; i < s->food_queue && i < PET_FOOD_MAX; i++) {
+        fb[PET_FOOD_POSITION] |= _pet_food_pips[i];
+    }
+
+    // Transient marks. Sideways, H is the horizontal stroke and G the vertical,
+    // so G|H is a plus and H alone is a minus — the opposite way round from the
+    // firmware's own upright '+' and '-'.
+    if (s->buff_ticks)   fb[PET_BUFF_POSITION] |= SEG_G | SEG_H;
+    if (s->debuff_ticks) fb[PET_BUFF_POSITION] |= SEG_H;
+    if (s->bell_ticks)   flags |= PET_FRAME_BELL;
+    if (s->signal_ticks) flags |= PET_FRAME_SIGNAL;
+
+    for (uint8_t p = 0; p < 10; p++) _pet_draw_position(p, fb[p]);
+    _pet_draw_flags(flags);
+
+    // Scaffold until the character art lands: its name in positions 4-8. Cell 9
+    // is left alone so the poo beside it still shows.
+    if (label) {
+        for (uint8_t i = 0; i < 5 && label[i]; i++) watch_display_character(label[i], 4 + i);
+    }
 }
 
 // ============================================================================
 // 4. Animation engine
 // ============================================================================
 //
-// One animation plays at a time. A short queue lets a scene say "wake, then
-// the mood, then the poo" and have them play back to back. A looping
-// animation only loops when nothing is waiting behind it. When the queue
-// runs dry the pet rests (the spec's "blink").
+// Each layer plays its own animation on its own clock, so the pet's mood and
+// what's on the floor beside it advance independently. The character layer
+// additionally has a short queue, which lets a scene say "wake, then the mood"
+// and have them run back to back; when it empties, the pet rests (the spec's
+// "blink"). Every other layer settles to its idle animation instead.
 
 static void _pet_rest(pet_state_t *s);
 
@@ -294,19 +331,28 @@ static uint8_t _pet_frame_hold(const pet_anim_t *a, uint8_t frame) {
     return a->frames ? a->frames[frame].hold : PET_ANIM_HZ;
 }
 
-// True while a one-shot animation is still on screen. The looping animations
-// (the moods, snore) are the resting state, so they never count as busy.
-// Scene timers use this to wait their turn instead of cutting an animation off
-// part-way — otherwise an eat animation longer than PET_FEED_PIP_SECONDS would
-// be truncated by the next pip.
+// True while a one-shot is still on screen. The looping animations (the moods,
+// snore) are the resting state, so they never count as busy. Scene timers use
+// this to wait their turn instead of cutting an animation off part-way —
+// otherwise an eat animation longer than PET_FEED_PIP_SECONDS would be
+// truncated by the next pip.
 static bool _pet_anim_busy(const pet_state_t *s) {
-    return s->anim != PET_ANIM_NONE && !_pet_anims[s->anim].loop;
+    uint8_t id = s->layer[PET_LAYER_CHARACTER].anim;
+    return id != PET_ANIM_NONE && !_pet_anims[id].loop;
 }
 
+// Point a layer at an animation, from frame zero.
+static void _pet_layer_play(pet_state_t *s, pet_layer_id_t l, pet_anim_id_t id) {
+    pet_layer_t *L = &s->layer[l];
+    L->anim = (uint8_t) id;
+    L->frame = 0;
+    L->hold_left = _pet_frame_hold(&_pet_anims[id], 0);
+}
+
+// Play an animation on whichever layer owns it. Which layer that is comes from
+// the animation table, so callers never have to think about it.
 static void _pet_start_anim(pet_state_t *s, pet_anim_id_t id) {
-    s->anim = id;
-    s->frame = 0;
-    s->hold_left = _pet_frame_hold(&_pet_anims[id], 0);
+    _pet_layer_play(s, _pet_anims[id].layer, id);
     _pet_draw(s);
 }
 
@@ -323,35 +369,80 @@ static bool _pet_start_next_queued(pet_state_t *s) {
     return true;
 }
 
-static void _pet_anim_tick(pet_state_t *s) {
-    const pet_anim_t *a = &_pet_anims[s->anim];
+// The status layer is a direct read of what's on the floor. A barf already
+// playing isn't interrupted — it settles to whatever this wanted afterwards.
+static void _pet_set_status(pet_state_t *s) {
+    pet_anim_id_t want = (s->has_poo && _pet_mood(s) != PET_MOOD_DEAD)
+                       ? PET_ANIM_POO : PET_ANIM_NONE;
+    pet_layer_t *L = &s->layer[PET_LAYER_STATUS];
+    L->idle = (uint8_t) want;
+    if (L->anim != PET_ANIM_BARF) _pet_layer_play(s, PET_LAYER_STATUS, want);
+}
+
+static void _pet_layer_tick(pet_state_t *s, pet_layer_id_t l) {
+    pet_layer_t *L = &s->layer[l];
+    if (L->anim == PET_ANIM_NONE) return;
+
+    const pet_anim_t *a = &_pet_anims[L->anim];
     uint8_t count = a->frames ? a->count : 1;
     bool loop_here = a->loop;
+    bool queued = (l == PET_LAYER_CHARACTER) && (s->queue_len > 0);
 
 #if PET_DEBUG_CONTROLS
     // Hold whatever is being previewed on screen, one-shots included, so it can
     // be looked at for as long as it takes rather than flashing past once.
-    if (s->debug_preview) loop_here = true;
+    if (s->debug_preview) { loop_here = true; queued = false; }
 #endif
 
-    if (s->hold_left > 1) {
-        s->hold_left--;
+    if (L->hold_left > 1) {
+        L->hold_left--;
         return;
     }
 
-    s->frame++;
-    if (s->frame >= count) {
-        if (loop_here && s->queue_len == 0) {
-            s->frame = 0;
-        } else if (!_pet_start_next_queued(s)) {
-            _pet_rest(s);
-            return;
-        } else {
-            return;
-        }
+    L->frame++;
+    if (L->frame < count) {
+        L->hold_left = _pet_frame_hold(a, L->frame);
+        _pet_draw(s);
+        return;
     }
-    s->hold_left = _pet_frame_hold(a, s->frame);
+
+    // The animation just ended.
+    if (loop_here && !queued) {
+        L->frame = 0;
+        L->hold_left = _pet_frame_hold(a, 0);
+        _pet_draw(s);
+        return;
+    }
+    if (queued) {
+        _pet_start_next_queued(s);
+        return;
+    }
+    if (l == PET_LAYER_CHARACTER) {
+        _pet_rest(s);
+        return;
+    }
+    _pet_layer_play(s, l, (pet_anim_id_t) L->idle);
     _pet_draw(s);
+}
+
+static void _pet_anim_tick(pet_state_t *s) {
+    for (uint8_t l = 0; l < PET_LAYER_COUNT; l++) _pet_layer_tick(s, (pet_layer_id_t) l);
+}
+
+// Transient marks age out on their own; redraw only when one actually expires.
+static void _pet_flash_tick(pet_state_t *s) {
+    bool expired = false;
+    if (s->buff_ticks   && --s->buff_ticks   == 0) expired = true;
+    if (s->debuff_ticks && --s->debuff_ticks == 0) expired = true;
+    if (s->bell_ticks   && --s->bell_ticks   == 0) expired = true;
+    if (s->signal_ticks && --s->signal_ticks == 0) expired = true;
+    if (expired) _pet_draw(s);
+}
+
+// A plus or a minus in position 0, whenever the pet gains or loses ground.
+static void _pet_flash_buff(pet_state_t *s, bool gained) {
+    s->buff_ticks   = gained ? PET_FLASH_TICKS : 0;
+    s->debuff_ticks = gained ? 0 : PET_FLASH_TICKS;
 }
 
 // The spec's "blink": settle into the looping mood animation, poo on top if
@@ -360,15 +451,13 @@ static void _pet_anim_tick(pet_state_t *s) {
 static void _pet_rest(pet_state_t *s) {
     pet_mood_t mood = _pet_mood(s);
     s->queue_len = 0;
+    _pet_set_status(s);
 
     if (mood == PET_MOOD_DEAD) {
         s->scene = PET_SCENE_DEAD;
-        s->overlay = NULL;
         _pet_start_anim(s, PET_ANIM_DEAD);
         return;
     }
-
-    s->overlay = s->has_poo ? &_pet_overlay_poo : NULL;
 
     switch (s->scene) {
         case PET_SCENE_ASLEEP:
@@ -398,7 +487,7 @@ static void _pet_rest(pet_state_t *s) {
 // the screen back to the live pet, so repeated presses cycle through everything
 // and return, rather than sticking in preview with no way out.
 static void _pet_debug_next_anim(pet_state_t *s) {
-    pet_anim_id_t next = s->debug_preview ? (pet_anim_id_t) (s->anim + 1)
+    pet_anim_id_t next = s->debug_preview ? (pet_anim_id_t) (s->preview_anim + 1)
                                           : PET_ANIM_HAPPY;
     if (next >= PET_ANIM_COUNT) {
         s->debug_preview = false;
@@ -406,8 +495,12 @@ static void _pet_debug_next_anim(pet_state_t *s) {
         return;
     }
     s->debug_preview = true;
+    s->preview_anim = (uint8_t) next;
     s->queue_len = 0;
-    s->overlay = NULL;
+    // Clear both layers first: stepping onto a status animation shouldn't leave
+    // the character standing there, or vice versa.
+    _pet_layer_play(s, PET_LAYER_CHARACTER, PET_ANIM_NONE);
+    _pet_layer_play(s, PET_LAYER_STATUS, PET_ANIM_NONE);
     _pet_start_anim(s, next);
 }
 
@@ -541,6 +634,7 @@ static void _pet_catch_up(pet_state_t *s) {
 // screen).
 static void _pet_disturb(pet_state_t *s) {
     _pet_add_qt(s, PET_DEBUFF_DISTURB);
+    _pet_flash_buff(s, false);
     s->night_awake_ticks = PET_NIGHT_AWAKE_SECONDS * PET_ANIM_HZ;
     if (s->scene == PET_SCENE_ASLEEP) {
         s->scene = PET_SCENE_NIGHT_AWAKE;
@@ -579,7 +673,9 @@ static void _pet_feed_press(pet_state_t *s) {
     if (s->food_queue < PET_FOOD_MAX) s->food_queue++;
     s->feed_ticks = PET_FEED_SETTLE_SECONDS * PET_ANIM_HZ;
     s->scene = PET_SCENE_FEEDING;
-    // TODO: show the queued pips on screen so the wearer can count them.
+    // The pips are composited straight from food_queue, so the wearer can count
+    // what's waiting. The bell rings on each press — a dinner bell.
+    s->bell_ticks = PET_BELL_TICKS;
     _pet_draw(s);
 }
 
@@ -604,7 +700,8 @@ static void _pet_feed_tick(pet_state_t *s) {
     if (!s->has_poo && s->poo_due_ts == 0) {
         s->poo_due_ts = now + PET_POO_DELAY_SECONDS;
     }
-    _pet_play_sound(PET_SOUND_EAT);
+    _pet_flash_buff(s, true);
+    _pet_play_sound(s, PET_SOUND_EAT);
     _pet_start_anim(s, PET_ANIM_EAT);
     s->feed_ticks = PET_FEED_PIP_SECONDS * PET_ANIM_HZ;
 }
@@ -614,10 +711,12 @@ static void _pet_hug(pet_state_t *s) {
     if (s->hugs_today < PET_HUG_CAP) {
         s->hugs_today++;
         _pet_add_qt(s, -PET_BUFF_HUG);
+        _pet_flash_buff(s, true);
     }
     // Decided 2026-09-12: past the cap the pet still gets kissed, it just
-    // doesn't help. A button that silently does nothing reads as broken.
-    _pet_play_sound(PET_SOUND_KISS);
+    // doesn't help. A button that silently does nothing reads as broken — and
+    // the missing plus sign is what tells you the cap is spent.
+    _pet_play_sound(s, PET_SOUND_KISS);
     _pet_start_anim(s, PET_ANIM_KISS);
 }
 
@@ -629,7 +728,7 @@ static void _pet_sweep(pet_state_t *s) {
     s->has_poo = false;
     s->poo_due_ts = 0;
     s->poo_residual = 0;
-    s->overlay = NULL;
+    _pet_set_status(s);
     // There's no sweep animation in the checklist, so the acknowledgement is
     // the mood animation restarting from frame 0 — enough to show the press
     // landed. Not while the pet is asleep: that would cut off the snoring.
@@ -684,6 +783,7 @@ static void _pet_on_motion(pet_state_t *s) {
     if (s->play_buffed) {
         s->last_play_buff_ts = now;
         _pet_add_qt(s, -PET_BUFF_PLAY);
+        _pet_flash_buff(s, true);
     }
     _pet_start_anim(s, PET_ANIM_PLAY_SMALL);
 }
@@ -702,7 +802,8 @@ static void _pet_play_tick(pet_state_t *s) {
         // lose. The cooldown itself stays spent: a pet that has just been made
         // sick is not in the mood to play again.
         _pet_add_qt(s, (s->play_buffed ? PET_BUFF_PLAY : 0) + PET_DEBUFF_BARF);
-        _pet_play_sound(PET_SOUND_BARF);
+        _pet_flash_buff(s, false);
+        _pet_play_sound(s, PET_SOUND_BARF);
         _pet_start_anim(s, PET_ANIM_BARF);
     } else if (s->nausea > 0) {
         // Decided 2026-09-12: nothing in the spec says what triggers PLAY_BIG,
@@ -728,10 +829,15 @@ static void _pet_enter(pet_state_t *s) {
     s->food_queue = 0;
     s->nausea = 0;
     s->play_buffed = false;
-    s->overlay = NULL;
+    s->buff_ticks = s->debuff_ticks = s->bell_ticks = s->signal_ticks = 0;
+    _pet_layer_play(s, PET_LAYER_CHARACTER, PET_ANIM_NONE);
+    _pet_layer_play(s, PET_LAYER_STATUS, PET_ANIM_NONE);
 #if PET_DEBUG_CONTROLS
     s->debug_preview = false;
 #endif
+    // Whatever is on the floor shows from the first frame, rather than waiting
+    // for the wake/mood queue to drain and _pet_rest to get around to it.
+    _pet_set_status(s);
 
     pet_mood_t mood = _pet_mood(s);
     if (mood == PET_MOOD_DEAD) {
@@ -744,14 +850,17 @@ static void _pet_enter(pet_state_t *s) {
     watch_date_time_t local = movement_get_local_date_time();
     switch (_pet_daypart(local.unit.hour)) {
         case PET_DAYPART_MORNING:
-            // wake (first visit of the morning), mood, poo if any, then rest
+            // wake on the first visit of the morning, then the mood.
+            // The spec also sequences the poo here, but that predates the
+            // layers: it now lives in its own cell and simply appears beside
+            // the pet, so there's nothing to queue. Queueing it would in fact
+            // stall the character layer, since the queue only feeds that one.
             s->scene = PET_SCENE_IDLE;
             if (s->woke_day != local.unit.day) {
                 s->woke_day = local.unit.day;
                 _pet_queue_anim(s, PET_ANIM_WAKE);
             }
             _pet_queue_anim(s, _pet_mood_anim(mood));
-            if (s->has_poo) _pet_queue_anim(s, PET_ANIM_POO);
             break;
         case PET_DAYPART_AFTERNOON:
             // static poo, mood, then rest
@@ -796,7 +905,7 @@ static void _pet_tick(pet_state_t *s, uint8_t subsecond) {
             // Snore on a timer rather than once on nodding off, so the pet is
             // audibly asleep the whole time you're looking at it.
             if (s->snore_ticks == 0) {
-                _pet_play_sound(PET_SOUND_SNORE);
+                _pet_play_sound(s, PET_SOUND_SNORE);
                 s->snore_ticks = PET_SNORE_PERIOD_SECONDS * PET_ANIM_HZ;
             } else {
                 s->snore_ticks--;
@@ -806,6 +915,7 @@ static void _pet_tick(pet_state_t *s, uint8_t subsecond) {
             break;
     }
     if (subsecond == 0) _pet_check_daypart(s);
+    _pet_flash_tick(s);
     _pet_anim_tick(s);
 }
 

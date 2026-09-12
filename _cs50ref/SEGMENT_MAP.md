@@ -8,11 +8,17 @@ Segment letters use the standard 7-segment convention, upright orientation:
 
 ```
     AAA
-   F   B
-    GGG
-   E   C
-    DDD      (H = extra segment, only in positions 0-1)
+   F H B
+    GGG     H is the centre VERTICAL stroke, and only positions 0-1 have it.
+   E H C    Upright, G|H draws a plus sign and A|H draws a letter T — the
+    DDD     firmware's own character set maps '*' to G|H and calls it "the +
+            sign for use in position 0".
 ```
+
+Rotate the display 90° clockwise to read the face sideways and those two swap
+roles: **G becomes the centre vertical and H the centre horizontal**. So a minus
+sign as the wearer sees it is `H` alone, not the `G` the firmware uses for '-'
+in upright text.
 
 ## The one-line rules
 
@@ -123,7 +129,7 @@ within a position — e.g. position 6 has six switches, not seven.)
 
 ```text
 0:AEFG          <- F
-1:A,BC,EF,G,H   <- R (everything but D; H is the diagonal leg)
+1:A,BC,EF,G,H   <- R (everything but D; H is the centre vertical)
 2:ADG,B,E       <- 2 (works here because 2 needs all three horizontals anyway)
 3:ACDFG         <- 5
 4:BC            <- 1

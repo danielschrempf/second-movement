@@ -606,3 +606,119 @@ budget. Hardware and simulator both pass.
 Next: the sketches. Everything downstream of them is ready — the frame format,
 the sideways geometry reference, a way to look at each animation on demand, and
 a balance that will actually drive the pet through its whole range.
+
+---
+
+## Session 6 — 2026-09-12 — The layered display engine
+
+### Two questions that had to be answered before any art
+
+Dan asked both before converting sketches, which was the right order — each one
+changes the export.
+
+**Frame rate.** Not free: `movement_request_tick_frequency` rejects anything
+that isn't a power of two (`__builtin_popcount(freq) != 1` at movement.c:428)
+and silently falls back to 1 Hz. So the menu is 1, 2, 4, 8, 16, 32, 64, 128 Hz,
+and the 12 fps the animations were drawn at simply isn't on it. The panel itself
+refreshes at 32 Hz — 32768 Hz crystal ÷ 64 prescale ÷ 4 clockdiv ÷ 4 commons,
+from the `slcd_init` call — so there's no point going above that either.
+
+The answer to "sparse frames or padded frames" is **sparse**: one frame per
+distinct pose, with an explicit `hold` in ticks. That's what the `hold` field was
+always for. Source fps stops mattering at conversion; what survives is the list
+of poses and how long each sits.
+
+Offered 16 Hz for the finer 62.5 ms granularity; Dan chose to **stay at 8 Hz**,
+on the grounds that slower is more elegant for this pet. It also halves the
+wakeups. Nothing else had to change — every scene timer is already written as
+`seconds × PET_ANIM_HZ`.
+
+**Layering.** The real question, and the answer is that bespoke combinations were
+never viable: five moods × five food states × two poo states is fifty
+full-screen animations against twelve as separate layers, and the checklist only
+has fourteen drawings in it.
+
+### The regions, and the one that needed checking
+
+Dan's assignment, which drove the implementation:
+
+| Layer | Cells |
+| --- | --- |
+| Character | 1, 4, 5, 6, 7, 8, colon, and 9's A D E F |
+| Poo / Barf | 9's G B C — poo is `G\|B\|C`, barf just the puddle `B\|C` |
+| Food | position 3, pips filling `B`, `C`, `F`, `E`; BELL rings on a press |
+| Buff / Debuff | position 0, plus `G\|H` and minus `H` |
+| Sound | SIGNAL, since the watch is usually kept silent |
+
+Position 1 joined the character region late, for snores and kisses coming off
+the mouth. It's the only character cell with ties (`B`+`C` are one control, so
+are `E`+`F`), which in the rotated view means whole top and bottom edges — it
+can draw three stacked horizontal strokes and three verticals, no diagonals. Good
+for puffs, no good for Z shapes.
+
+**Position 9 is deliberately shared** between the character and the poo, which is
+only safe because 9 has no tied segments — all seven of its addresses are
+distinct. The same split in position 4 or 6 would have broken silently, since A
+is tied to D in both.
+
+The engine therefore declares ownership **per segment, not per position**, and
+the compositor masks every frame against its layer's allowance. Art that strays
+outside its cells gets clipped rather than invading a neighbour.
+
+### Segment H was documented wrong
+
+Dan's plus/minus idea prompted a check, and the Session 3 notes turned out to be
+wrong: `SEGMENT_MAP.md` called H "the diagonal leg" of an R. It isn't — **H is
+the centre vertical stroke**, confirmed three ways in the firmware's own
+character set: `*` is `G|H` and is commented "The + sign for use in position 0",
+`T` is `A|H`, `I` is `A|D|H`. Fixed in both the doc and the header.
+
+Which makes Dan's scheme right, and right in a way the firmware itself isn't:
+upright, G is horizontal and H vertical, but **rotate for the sideways face and
+they swap** — so a minus as the wearer sees it is `H` alone, where the firmware's
+own `-` glyph is `G` and would read as a vertical bar on this face.
+
+### What got built
+
+- `pet_layer_def_t` per layer, `pet_layer_t` runtime state, and a compositor
+  that ORs masked layers into one framebuffer.
+- Layers run on independent clocks — the pet's mood and what's beside it advance
+  separately. The character layer keeps the animation queue; other layers settle
+  to an idle animation instead.
+- Animations declare their own layer, so callers never route by hand.
+- Food pips and the four transient marks aren't animations at all: they're a
+  direct read of state, composited each frame. That's simpler than contorting
+  them into the animation model, and it's what they actually are.
+- `_pet_play_sound` now also flashes SIGNAL, so every sound has a visual twin
+  automatically — the silent-watch case was Dan's, and putting it in the one
+  funnel every sound already went through made it free.
+- Poo and barf have **real art now**, not placeholders. They were fully specified.
+
+Fixed a bug the refactor created: the morning entry sequence still queued
+`PET_ANIM_POO` onto the character layer's queue. Since POO now belongs to the
+status layer, that would have started it on the wrong layer and stalled the
+character layer with nothing to advance it. The poo doesn't need queueing at all
+any more — it has its own cell and simply appears.
+
+### The debug HUD is gone
+
+It wanted four cells and Dan's regions claimed three of them. Offered to shrink
+it to a single tic digit in position 2; Dan dropped it instead — digits read as
+artificial on a sideways face, and the character's expression is the readout
+that matters. The preview harness stays, and losing the numeric crutch arguably
+makes it a better test: you judge the mood by looking at the pet.
+
+### Verification
+
+Wrote a standalone harness for the invariant the whole design rests on — that no
+two layers claim the same segment. It checks every layer pair, both non-animated
+regions against every layer, that position 9 ends up fully allocated across the
+two owners, that position 2 is genuinely unclaimed, and that a deliberately
+rogue frame with every bit set gets clipped out of its neighbours' cells. All
+pass.
+
+Hardware and simulator both build clean. 132,752 text + 2,044 data = 134,796,
+55% of budget. With `PET_DEBUG_CONTROLS` at 0: no unused-function warnings,
+160 bytes smaller.
+
+Next: the sketches. Nothing else is in the way.

@@ -143,10 +143,14 @@
 // these ticks; the pet is drawn at most this often.
 #define PET_ANIM_HZ                 8
 
-// Development HUD: top-left shows the scene code, top-right the quarter tics.
-// It lives in positions 0-3, which the sideways art never uses (they rotate out
-// to a column beside the pet), so it can stay on as long as it's useful.
-#define PET_DEBUG_HUD               1
+// How long a transient mark stays up: the buff/debuff sign, the dinner bell,
+// the sound indicator. Long enough to read, short enough not to linger.
+#define PET_FLASH_TICKS             (PET_ANIM_HZ)           // 1 s
+#define PET_BELL_TICKS              (PET_ANIM_HZ / 2)       // 0.5 s
+
+// Cells the non-animated layers live in.
+#define PET_BUFF_POSITION           0   // plus / minus sign
+#define PET_FOOD_POSITION           3   // the four pips
 
 // Development controls, for reviewing art and moods without waiting on the
 // clock — checking that the Angry animation looks right shouldn't mean
@@ -187,7 +191,8 @@
 //
 // So in a mouth cell: E|F is a flat line high (nearest the eyes), B|C a flat
 // line low, A|B|C|D|E|F an open "0" mouth, A|D|E|F an open rectangle missing
-// its bottom. H is the extra diagonal that only positions 0 and 1 have.
+// its bottom. H, which only positions 0 and 1 have, is the centre vertical
+// stroke: upright, G|H is a plus sign and A|H is a letter T.
 //
 // Per-cell quirks that constrain the art. Full table in _cs50ref/SEGMENT_MAP.md:
 //
@@ -234,12 +239,58 @@ typedef struct {
     uint8_t hold;       // frames to hold this for, at PET_ANIM_HZ (8 = one second)
 } pet_frame_t;
 
+// ---- Layers -----------------------------------------------------------------
+//
+// The screen is composited from independent layers, each owning its own cells.
+// Without that, every combination would need its own art: five moods times five
+// food states times two poo states is fifty full-screen animations, against
+// twelve as separate layers.
+//
+// Ownership is declared per segment, not just per position, because position 9
+// is split — the character has its top edge and both verticals, the poo has the
+// rest. That split is only safe because 9 has no tied segments; the same trick
+// in position 4 or 6 would break, since A is tied to D in both.
+//
+//   CHARACTER   1, 4, 5, 6, 7, 8, colon, and 9's A D E F
+//               the pet itself: moods, eating, kissing, snoring, dying.
+//               Position 1 sits off the mouth for snores and kisses; it is the
+//               one character cell with ties (B+C and E+F are whole edges).
+//   STATUS      9's G B C
+//               poo is the stem and base (G|B|C), barf just the puddle (B|C).
+//
+// Three things are composited but aren't animations, because they're a direct
+// function of state rather than a sequence: the food pips (position 3, filled
+// B, C, F, E as the queue grows), and the transient marks — the buff/debuff
+// sign in position 0, the dinner BELL, and the SIGNAL blink that stands in for
+// a sound when the watch is silent.
+typedef enum {
+    PET_LAYER_CHARACTER = 0,
+    PET_LAYER_STATUS,
+    PET_LAYER_COUNT
+} pet_layer_id_t;
+
+// What a layer is allowed to light. Anything a frame sets outside this is
+// masked off, so a stray segment in the art can't invade another layer's cell.
+typedef struct {
+    uint8_t seg[10];
+    uint8_t flags;
+} pet_layer_def_t;
+
 typedef struct {
     const char *label;          // drawn instead of frames while frames == NULL
     const pet_frame_t *frames;
     uint8_t count;
     bool loop;
+    pet_layer_id_t layer;       // which layer this animation plays on
 } pet_anim_t;
+
+// One layer's playback position.
+typedef struct {
+    uint8_t anim;               // pet_anim_id_t currently playing
+    uint8_t idle;               // what to fall back to when a one-shot ends
+    uint8_t frame;
+    uint8_t hold_left;
+} pet_layer_t;
 
 // Every animation in the spec's checklist.
 typedef enum {
@@ -320,12 +371,14 @@ typedef struct {
 
     // -- Per-visit state. Reset every activate.
     pet_scene_t scene;
-    pet_anim_id_t anim;
-    uint8_t  frame;
-    uint8_t  hold_left;
-    pet_anim_id_t queue[PET_QUEUE_LEN];
+    pet_layer_t layer[PET_LAYER_COUNT];
+    pet_anim_id_t queue[PET_QUEUE_LEN];     // sequences on the character layer
     uint8_t  queue_len;
-    const pet_frame_t *overlay; // drawn on top of every frame (the static poo)
+    // Transient marks, in ticks remaining. Composited while non-zero.
+    uint8_t  buff_ticks;        // plus sign, position 0
+    uint8_t  debuff_ticks;      // minus sign, position 0
+    uint8_t  bell_ticks;        // dinner bell on a feed
+    uint8_t  signal_ticks;      // stands in for a sound on a silent watch
     uint8_t  food_queue;
     uint16_t feed_ticks;
     uint16_t play_ticks;
@@ -335,6 +388,7 @@ typedef struct {
     uint16_t snore_ticks;
     bool     tap_enabled;
     bool     debug_preview;     // PET_DEBUG_CONTROLS: an animation is held on screen
+    uint8_t  preview_anim;      // ... and which one, so stepping walks the list
 } pet_state_t;
 
 void pet_face_setup(uint8_t watch_face_index, void ** context_ptr);
