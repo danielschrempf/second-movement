@@ -722,3 +722,65 @@ Hardware and simulator both build clean. 132,752 text + 2,044 data = 134,796,
 160 bytes smaller.
 
 Next: the sketches. Nothing else is in the way.
+
+---
+
+## Session 7 — 2026-09-12 — Cleanup pass before the art
+
+A deliberate stop to get the tree clean before animations start landing, on the
+principle that it's easier to keep documentation honest than to repair it later.
+Comment-only changes throughout; the firmware is byte-identical at 132,752 text
++ 2,044 data.
+
+### Verified rather than trusted
+
+Rather than reading the docs for plausibility, checked their factual claims
+against the source. Parsed `Classic_LCD_Display_Mapping` and derived the tie
+structure per position directly from duplicate segment addresses:
+
+```text
+  0   8 controls, none tied, has H      5   7 controls, none tied
+  1   6 controls, B+C and E+F tied      6   6 controls, A+D tied
+  2   4 controls, A+D+G tied, no F      7   7 controls, none tied
+  3   7 controls, none tied             8   7 controls, none tied
+  4   6 controls, A+D tied              9   7 controls, none tied
+```
+
+Every entry in SEGMENT_MAP's per-position table matches, as do all of its worked
+glyph examples when checked against the firmware's own character set. One
+inconsistency fixed: the table flagged "no H" on some positions but not others,
+when in fact only 0 and 1 have H at all.
+
+### What was actually wrong
+
+- **"the smaller 8 and 9 off to one side".** They aren't. Decoding the exported
+  art settled the geometry: the main line stacks 4, 5, colon, 6, 7 and then 8
+  and 9 *continue below it*, smaller. The old top row becomes a right-hand
+  column. Corrected in the header.
+- **The outstanding-work list was stale.** It still named the on-screen food
+  queue, which the layer work implemented, and persistence, which was dropped on
+  purpose. Two TODOs remain — character frames and the four sounds — and the
+  header now says exactly that.
+- **CLAUDE.md still described `DECIDE` markers**, of which none survive, and
+  carried a flash baseline measured on the Mac before the face was built out.
+- **Section headings had drifted** from the file's own index after the layer
+  refactor: "Renderer" and "Animation engine" against a contents block that said
+  "Compositor" and "Layer engine".
+
+### Simplification
+
+The inline comments had grown essayistic — several were four or five lines of
+rationale where the surrounding codebase uses one. Trimmed throughout, keeping
+the *why* and dropping the retelling: a comment earns its place by explaining
+something the code can't say itself.
+
+Also stripped the "Decided 2026-09-12" stamps sprinkled through the code. The
+decision belongs next to the code it governs; the date belongs here, in the log.
+Net 40 lines lighter across the two files with nothing lost.
+
+Added to SEGMENT_MAP a regions table naming which cells each part of the pet
+owns, since that is the document open while drawing. CLAUDE.md now also points
+at the GIF decode pipeline, which is otherwise only findable by reading back
+through Session 6.
+
+Both targets build clean, `PET_DEBUG_CONTROLS` at 0 included.

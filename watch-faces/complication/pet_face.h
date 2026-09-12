@@ -51,16 +51,11 @@
  * costs tics and earns no buff. While you're on another face nothing runs;
  * time is caught up lazily the next time the face is activated.
  *
- * Spec: _cs50ref/CS50x Final Project.md
+ * Spec: _cs50ref/CS50x Final Project.md, with the reasoning behind every
+ * departure from it recorded in _cs50ref/DEVLOG.md.
  *
- * Markers used in pet_face.c:
- *   TODO    work that has to happen before this can run for real
- *   DECIDE  the spec is ambiguous or silent; a default is in place
- *
- * As of 2026-09-12 no DECIDE markers are left — every ambiguity in the spec has
- * been settled and the reasoning recorded at the point it applies. What remains
- * is TODOs: the animation frames, the four sounds, the on-screen food queue,
- * and a battery measurement.
+ * TODO in pet_face.c marks work still outstanding: the character animation
+ * frames and the four sounds.
  */
 
 // ---- Tunables ---------------------------------------------------------------
@@ -89,19 +84,15 @@
 #define PET_HUG_CAP                 4   // ... up to -1.0 tic, per calendar day
 #define PET_BUFF_EAT                1   // -0.25 tic per pip eaten
 #define PET_DEBUFF_DISTURB          1   // +0.25 tic each time sleep is disturbed
-// Shaking past PET_NAUSEA_LIMIT makes the pet barf: it gives back the play
-// buff it just earned and costs another 0.25 on top, so over-shaking is worse
-// than never having played. Decided 2026-09-12.
+// Barfing returns the play buff and costs this on top, so over-shaking ends up
+// worse than never having played.
 #define PET_DEBUFF_BARF             1
 
-// Poo appears this long after a pip is eaten. The spec says both "0.25 tic
-// after every feed" (1.5 h) and, in Feed(), "poo countdown (2 tic)" (12 h).
-// Decided 2026-09-12: 12 h, the more explicit of the two. At 1.5 h a poo is
-// sitting on screen almost whenever you have fed, and since an unswept poo
-// doubles the decay rate, feeding in the evening cost more than it gave.
+// Poo arrives this long after a pip is eaten. The spec gives two different
+// figures; this is Feed()'s explicit "poo countdown (2 tic)". The other reading,
+// 1.5 h, left a poo on screen almost whenever you had fed.
 #define PET_POO_DELAY_SECONDS       (2 * PET_SECONDS_PER_TIC)
-// An unswept poo adds +1 tic per tic of waking time — same rate as passive
-// decay, so a poo left sitting doubles the rate.
+// An unswept poo accrues at the same rate as passive decay, so it doubles it.
 #define PET_POO_SECONDS_PER_QT      (PET_SECONDS_PER_QT)
 
 // Feeding
@@ -113,10 +104,8 @@
 #define PET_PLAY_WINDOW_SECONDS     5
 #define PET_NAUSEA_LIMIT            3   // more motion than this inside the window -> barf
 // Shaking always plays with the pet, but the buff only lands once per cooldown.
-// Without this, play was the one uncapped source of relief — hugs are capped
-// and feeding is self-limiting via poo — so a shake every 5 s healed the pet
-// from death's door in about a minute. At 2 h that's ~8 buffs per waking day,
-// -16 quarter tics against a ~10.7 daily cost: generous, but not infinite.
+// Hugs are capped and feeding is limited by poo; without this, play was the one
+// uncapped source of relief and a shake every 5 s healed the pet in a minute.
 #define PET_PLAY_COOLDOWN_SECONDS   (2 * 60 * 60)
 
 // Day parts (local time, 24 h clock)
@@ -124,19 +113,15 @@
 #define PET_HOUR_AFTERNOON          10  // 10:00 afternoon starts
 #define PET_HOUR_SLEEP              21  // 21:00 night starts
 
-// Decided 2026-09-12: neither passive decay nor an unswept poo accrues while
-// the pet is asleep — you are not neglecting a pet that is in bed, and the
-// +0.25 disturb penalty already covers interrupting it. So only these many
-// seconds of each day count against the pet. An entirely ignored pet still
-// dies, in ~54 h of wall clock rather than ~36 h.
+// Only waking seconds count against the pet: nothing decays while it sleeps,
+// and the disturb penalty already covers interrupting it. An ignored pet dies
+// in ~40 h of wall clock rather than ~36 h.
 #define PET_AWAKE_SECONDS_PER_DAY   ((PET_HOUR_SLEEP - PET_HOUR_WAKE) * 60 * 60)
 
-// The spec doesn't say when a disturbed pet settles back down. Long enough to
-// interact with it once more, short enough that it clearly wants to sleep.
+// How long a disturbed pet stays up before settling again.
 #define PET_NIGHT_AWAKE_SECONDS     30
 
-// How often the pet snores while you're watching it sleep. The spec's snore is
-// an animation; a single beep on nodding off is easy to miss, so it repeats.
+// Snoring repeats on this period; one beep on nodding off is easy to miss.
 #define PET_SNORE_PERIOD_SECONDS    6
 
 // Tick rate while the face is on screen. Every timer above is counted in
@@ -152,25 +137,22 @@
 #define PET_BUFF_POSITION           0   // plus / minus sign
 #define PET_FOOD_POSITION           3   // the four pips
 
-// Development controls, for reviewing art and moods without waiting on the
-// clock — checking that the Angry animation looks right shouldn't mean
-// neglecting the pet for most of a day.
+// Development controls, so art can be reviewed without waiting on the clock.
 //
-//   LIGHT held 1.5 s   step to the next animation and hold it on screen, one
-//                      at a time through all fourteen, then back to the live pet
+//   LIGHT held 1.5 s   hold the next animation on screen; walks the whole list
+//                      and then hands the screen back to the live pet
 //   ALARM held 1.5 s   push the mood up one tic, wrapping past dead to blissful
 //
-// Both also fire their normal 0.5 s long-press on the way past — a hug, a
-// resurrect — because Movement delivers that before the 1.5 s event. Harmless
-// while previewing: the mood stepper overrides the state anyway.
+// Both also fire their normal 0.5 s long-press on the way past, since Movement
+// delivers that first. Harmless while previewing.
 #define PET_DEBUG_CONTROLS          1
 
 // ---- Frames -----------------------------------------------------------------
 
-// THE FACE READS SIDEWAYS — the watch is turned 90 degrees clockwise, so the pet
-// stacks down the screen as 4, 5, (colon = the eyes), 6, 7, with the smaller 8
-// and 9 off to one side. Settled 2026-09-12: every animation is drawn for this
-// orientation, and the upright alternative is off the table.
+// THE FACE READS SIDEWAYS — the watch is turned 90 degrees clockwise, so the
+// main line stacks downward as 4, 5, (colon = the eyes), 6, 7, then the smaller
+// 8 and 9 below it. The old top row (0-3 and the indicators) becomes a column
+// up the right-hand side.
 //
 // Segment bits keep the hardware's upright lettering, because that is what the
 // driver's mapping tables use. But when you author a frame you are thinking in
@@ -194,25 +176,27 @@
 // its bottom. H, which only positions 0 and 1 have, is the centre vertical
 // stroke: upright, G|H is a plus sign and A|H is a letter T.
 //
-// Per-cell quirks that constrain the art. Full table in _cs50ref/SEGMENT_MAP.md:
+// Per-cell constraints, verified against Classic_LCD_Display_Mapping. Ties are
+// single electrical addresses: both halves light together or not at all. Full
+// table in _cs50ref/SEGMENT_MAP.md.
 //
-//   4   top of the head     A tied to D: both verticals together, or neither
-//   5   full 7 segments     the most expressive cell above the eyes
-//   :   THE EYES            one single segment — both dots always move together,
-//                           and the classic LCD cannot blink them in hardware,
-//                           so every blink is CPU-driven from the tick handler
-//   6   just below the eyes A tied to D: symmetric mouths only, no lopsided smirks
-//   7   below that          full 7, and the only position with autonomous blink
-//   8   small, off-axis     full 7; its D+E carry the hardware tick/tock, which
-//                           the system also borrows as its sleep indicator
-//   9   small, off-axis     full 7
+//   0   right column, top   all 8 independent, H included — the only such cell
+//   1   below it            6 controls; B+C and E+F are tied whole edges
+//   3   right column        7 independent; carries the food pips
+//   4   top of the head     A tied to D — both verticals together, or neither
+//   5   above the eyes      7 independent, the most expressive cell up there
+//   :   THE EYES            one segment: both dots always move together, and
+//                           the classic LCD can't blink them in hardware, so
+//                           every blink is a CPU-drawn frame
+//   6   below the eyes      A tied to D — symmetric mouths only, no smirks
+//   7   below that          7 independent
+//   8   smaller, below      7 independent; D+E carry the hardware tick/tock
+//   9   smaller, bottom     7 independent; shared with the status layer
 //
-// The position 7 blink is tempting for snoring — it runs with no CPU and keeps
-// going in STANDBY and sleep mode — but watch_start_character_blink() takes a
-// *character*, not a segment mask, and only a handful blink cleanly (segment B
-// cannot: 5, 6, b, C, c, E, F, h, i, L, l, n, o, S, t and some punctuation).
-// watch_stop_blink() also clears position 7 outright. Mixing it with the frame
-// renderer below means giving that one cell over to the hardware entirely.
+// Position 7 is the only one that can blink autonomously, which is tempting for
+// snoring, but watch_start_character_blink() takes a character rather than a
+// segment mask and watch_stop_blink() clears the cell outright — using it means
+// giving that cell to the hardware entirely.
 //
 #define SEG_A   (1 << 0)
 #define SEG_B   (1 << 1)
@@ -241,28 +225,24 @@ typedef struct {
 
 // ---- Layers -----------------------------------------------------------------
 //
-// The screen is composited from independent layers, each owning its own cells.
-// Without that, every combination would need its own art: five moods times five
-// food states times two poo states is fifty full-screen animations, against
-// twelve as separate layers.
-//
-// Ownership is declared per segment, not just per position, because position 9
-// is split — the character has its top edge and both verticals, the poo has the
-// rest. That split is only safe because 9 has no tied segments; the same trick
-// in position 4 or 6 would break, since A is tied to D in both.
+// The screen is composited from independent layers, each owning its own cells,
+// so the pet's mood and what's beside it animate separately. Bespoke art per
+// combination was never viable: five moods times five food states times two poo
+// states is fifty full-screen animations against twelve as layers.
 //
 //   CHARACTER   1, 4, 5, 6, 7, 8, colon, and 9's A D E F
-//               the pet itself: moods, eating, kissing, snoring, dying.
-//               Position 1 sits off the mouth for snores and kisses; it is the
-//               one character cell with ties (B+C and E+F are whole edges).
-//   STATUS      9's G B C
-//               poo is the stem and base (G|B|C), barf just the puddle (B|C).
+//               moods, eating, kissing, snoring, dying. Position 1 sits off the
+//               mouth for snores and kisses.
+//   STATUS      9's G B C — poo is the stem and base, barf just the puddle.
 //
-// Three things are composited but aren't animations, because they're a direct
-// function of state rather than a sequence: the food pips (position 3, filled
-// B, C, F, E as the queue grows), and the transient marks — the buff/debuff
-// sign in position 0, the dinner BELL, and the SIGNAL blink that stands in for
-// a sound when the watch is silent.
+// Ownership is per segment rather than per position because position 9 is split
+// between the two. That is only safe because 9 has no tied segments; the same
+// split in 4 or 6 would break, since A is tied to D in both.
+//
+// Three things are composited but aren't animations, being a direct function of
+// state: the food pips (position 3, filling B, C, F, E as the queue grows) and
+// the transient marks — the buff/debuff sign in position 0, the dinner BELL,
+// and the SIGNAL blink that stands in for a sound on a silent watch.
 typedef enum {
     PET_LAYER_CHARACTER = 0,
     PET_LAYER_STATUS,
@@ -349,19 +329,17 @@ typedef enum {
 #define PET_QUEUE_LEN 4
 
 typedef struct {
-    // -- Pet state. Lives in RAM across face switches and low-energy mode, so
-    //    in daily wear it persists indefinitely; only a battery pull, a
-    //    reflash or a crash hatches a new pet. See _pet_load in pet_face.c for
-    //    why that's deliberate.
+    // -- Pet state. Survives face switches and low-energy mode, so in daily
+    //    wear it persists indefinitely; only a battery pull, a reflash or a
+    //    crash hatches a new pet. See _pet_load for why that's deliberate.
     uint8_t  quarter_tics;
     bool     has_poo;
     uint32_t last_update_ts;    // decay applied up to here (UTC)
     uint32_t last_fed_ts;       // for the missed-day penalty
     uint32_t poo_due_ts;        // a poo is on its way; 0 = none pending
     uint32_t poo_since_ts;      // the current poo has been sitting since here
-    // Waking seconds counted but not yet worth a whole quarter tic. Decay is
-    // charged in awake time, which doesn't divide evenly into wall time, so
-    // the leftovers are carried here instead of being rounded away.
+    // Waking seconds counted but not yet worth a whole quarter tic. Carried
+    // rather than rounded away, or frequent visits would outrun decay.
     uint16_t awake_residual;
     uint16_t poo_residual;
     uint32_t last_play_buff_ts; // the play cooldown runs from here

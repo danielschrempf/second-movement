@@ -8,9 +8,17 @@ The active project is **`pet_face`** — a Tamagotchi-style virtual pet, built a
 CS50x final project. Dan's design is the pseudo code in
 [CS50x Final Project.md](_cs50ref/CS50x%20Final%20Project.md); read it before
 changing pet behaviour. The LCD segment reference is
-[SEGMENT_MAP.md](_cs50ref/SEGMENT_MAP.md), and [DEVLOG.md](_cs50ref/DEVLOG.md)
-is the process log — append to it as work lands. In `pet_face.c`, `TODO` marks
-unfinished work and `DECIDE` marks a spec ambiguity with a default in place.
+[SEGMENT_MAP.md](_cs50ref/SEGMENT_MAP.md) — which also holds the region map
+saying which cells each part of the pet owns — and [DEVLOG.md](_cs50ref/DEVLOG.md)
+is the process log, appended to as work lands. Every ambiguity in the spec has
+been settled, with the reasoning recorded where it applies; `TODO` in
+`pet_face.c` marks the work still outstanding.
+
+Animations are drawn as segment art on an F-91W template and exported as GIFs.
+They are not transcribed by hand: the frames rotate back to the native layout,
+which locates every segment geometrically and decodes to masks. `ffmpeg` splits
+the GIF (reading one directly only ever yields its first frame). See the
+Session 6 devlog entry for the pipeline and its calibration.
 
 Development happens on two machines — a Windows 11 PC (primary) and a Mac.
 
@@ -71,8 +79,8 @@ explicitly, as in the command above.
 
 **3. Flash budget.** Usable flash is `0x40000 - 0x2000 (bootloader) - 0x2000
 (eeprom)` = **245,760 bytes**. Too many faces in `movement_config.h` is a
-compile error, not a runtime surprise. Baseline as of GCC 15.3 on the Mac:
-132,608 text + 2,488 data = 135,096 (55%, ~108 KB free). RAM is 32 KB.
+compile error, not a runtime surprise. Current build on the PC (GCC 14.2):
+132,752 text + 2,044 data = 134,796 (55%, ~108 KB free). RAM is 32 KB.
 
 Expect the two machines to report *different* sizes — the ARM GCC versions
 differ. GCC 15.3 also emits warning classes the PC's older GCC doesn't (e.g.

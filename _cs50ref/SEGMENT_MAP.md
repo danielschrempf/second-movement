@@ -36,14 +36,18 @@ in upright text.
 | 0 | weekday left | **8** — A B C D E F G + H | none — the most capable digit |
 | 1 | weekday right | 6 — A, B+C, D, E+F, G, H | **B tied to C**, **E tied to F** |
 | 2 | day tens | **4** — A+D+G, B, C, E | **all three horizontals are ONE control**; F doesn't exist |
-| 3 | day ones | 7 — full | none (no H) |
+| 3 | day ones | 7 — full | none |
 | 4 | hours tens | 6 — A+D, B, C, E, F, G | **A tied to D** |
 | 5 | hours ones | 7 — full | none |
 | : | colon | **1** — both dots together | can't wink, can't move |
 | 6 | minutes tens | 6 — A+D, B, C, E, F, G | **A tied to D** |
-| 7 | minutes ones | 7 — full | none; **hardware auto-blink** (all segments except B; 50 ms–4.25 s period; keeps blinking in sleep mode) |
-| 8 | seconds tens | 7 — full | no H; **hardware tick/tock animation on D+E** (also used by the system as the low-energy sleep indicator) |
-| 9 | seconds ones | 7 — full | no H |
+| 7 | minutes ones | 7 — full | **hardware auto-blink** (all segments except B; 50 ms–4.25 s period; keeps blinking in sleep mode) |
+| 8 | seconds tens | 7 — full | **hardware tick/tock animation on D+E** (also the system's low-energy sleep indicator) |
+| 9 | seconds ones | 7 — full | none |
+
+Only positions 0 and 1 have an H segment; 2–9 have no H at all, and position 2
+has no F either. Verified against `Classic_LCD_Display_Mapping` by comparing
+segment addresses per position.
 
 Indicators (SIGNAL, BELL, PM, 24H, LAP) are each one segment. The five-bar
 SIGNAL "fan" lights as a unit.
@@ -56,10 +60,9 @@ SIGNAL "fan" lights as a unit.
 
 ## The face reads sideways (rotated 90° clockwise, position 4 at top)
 
-**Decided 2026-09-12 — this is the orientation.** Dan's animations are all drawn
-for it, and the upright alternative is off the table. The rest of this section is
-the working reference for authoring frames; the comparison at the end is kept
-only to record why.
+**This is the orientation.** The animations are all drawn for it; the upright
+alternative is off the table. Confirmed against the drawn exports, which rotate
+counter-clockwise back to the native F-91W layout exactly.
 
 Reading top-to-bottom becomes: 4, 5, **colon (eyes)**, 6, 7, then the small 8, 9.
 The old top row (weekday, day, indicators) becomes a right-hand column.
@@ -86,21 +89,36 @@ Handy sideways mouth shapes on a full digit (5, 7, 8 or 9):
   rotated) — mouth shapes there always get both sides or neither; fine for
   symmetric mouths, no lopsided smirks in that cell
 
-The colon-as-eyes trade-off, stated plainly: **eyes gain nothing but position
-(they're a fixed pair of dots that can only blink together), and the mouth gains
-everything** — a full 7-segment cell (or two) of expression range. The upright
-alternative keeps expressive eyes (6–7) but limits the mouth to the small 8–9
-digits. Both were buildable on the same frame engine, which maps masks to
-(com, seg) pixels either way, so this was an art-direction call rather than a
-capability one — and it went to sideways.
+The trade-off this orientation makes: the eyes gain nothing but position — a
+fixed pair of dots that can only go on and off together — while the mouth gains
+a full 7-segment cell of expression range.
 
 One consequence to design around: the colon is the one thing on the classic LCD
-that **cannot** blink autonomously (`watch_start_indicator_blink_if_possible`
-does nothing for it here). Since the colon is the eyes, every blink in the spec
-is a CPU-drawn frame at `PET_ANIM_HZ`, and the pet cannot keep blinking once the
-watch drops into sleep mode. Position 7 *can* blink in hardware and would keep
-going in STANDBY — but only as a whole character from a fixed list, not as a
-mask, so using it means handing that cell to the hardware entirely.
+that **cannot** blink autonomously. Since the colon is the eyes, every blink is a
+CPU-drawn frame at `PET_ANIM_HZ`, and the pet stops blinking once the watch drops
+into sleep mode. Position 7 *can* blink in hardware and keeps going in STANDBY,
+but only as a whole character from a fixed list rather than a mask, so using it
+means handing that cell to the hardware entirely.
+
+## Regions
+
+Each area of the screen is owned by one system, so they animate independently
+instead of needing bespoke art for every combination. Drawn content must stay
+inside its own cells.
+
+| Region | Cells |
+| --- | --- |
+| Character | 1, 4, 5, 6, 7, 8, colon, and 9's `A D E F` |
+| Poo / barf | 9's `G B C` — poo is `G\|B\|C`, barf the puddle `B\|C` |
+| Food pips | 3, filling `B`, `C`, `F`, `E` in that order |
+| Buff / debuff | 0 — plus is `G\|H`, minus is `H` |
+| Sound | SIGNAL, flashed whenever a sound plays |
+| unused | 2, PM, 24H, LAP |
+
+Position 9 is deliberately shared. That is only safe because it has no tied
+segments; the same split in 4 or 6 would break, since `A` is tied to `D` in both.
+Position 1 sits off the mouth for snores and kisses, and is the one character
+cell with ties — `B`+`C` and `E`+`F` are whole edges once rotated.
 
 ## Frame notation, with worked examples
 
