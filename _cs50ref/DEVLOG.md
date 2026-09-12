@@ -565,3 +565,44 @@ Worth noting how close this came to being a day of work on a non-problem. The
 `TODO` had been sitting in the file since Session 4 asserting that "a reset
 hatches a fresh one", which is true but says nothing about how often a reset
 happens. Checking the frequency rather than the mechanism is what killed it.
+
+### A preview harness, before the art
+
+Built the development controls that make converting sketches practical, on the
+principle that the tool comes before the work it serves.
+
+The problem it solves: most of the fourteen animations only appear when the
+clock says so. Checking that the Angry face reads right means neglecting the pet
+for most of a day; the dead one, a day and a half; snoring, waiting until 21:00.
+That is a miserable loop to be in fourteen times over.
+
+Two events were sitting unused as empty `break`s — `EVENT_LIGHT_REALLY_LONG_PRESS`
+and `EVENT_ALARM_REALLY_LONG_PRESS`, both fired at 1.5 s, well clear of the 0.5 s
+long-press the real controls use. So, behind a new `PET_DEBUG_CONTROLS` flag:
+
+- **LIGHT held 1.5 s** steps to the next animation and *holds* it, one-shots
+  included — `_pet_anim_tick` loops whatever is being previewed instead of
+  letting it play once and fall back to rest. Walking off the end of the list
+  hands the screen back to the live pet, so repeated presses cycle through all
+  fourteen and return rather than stranding you in preview.
+- **ALARM held 1.5 s** pushes the mood up one tic, wrapping past dead back to
+  blissful, so every threshold can be seen in order. Handy for the question the
+  segment constraints actually raise: do Confused and Upset read as different at
+  a glance, on a display this coarse?
+
+Any real interaction drops out of preview, so there's nothing to remember about
+escaping it. Both controls fire their normal long-press action on the way past —
+Movement delivers the 0.5 s event before the 1.5 s one, so stepping animations
+also hugs the pet. Harmless while previewing, and noted next to the flag.
+
+Verified the flag actually gates it: with `PET_DEBUG_CONTROLS` and
+`PET_DEBUG_HUD` both at 0 the firmware builds clean with no unused-function
+warnings and comes out 200 bytes smaller. A debug tool that breaks the release
+build is worse than no debug tool.
+
+Cost with both debug flags on: 132,256 text + 2,044 data = 134,300, 55% of
+budget. Hardware and simulator both pass.
+
+Next: the sketches. Everything downstream of them is ready — the frame format,
+the sideways geometry reference, a way to look at each animation on demand, and
+a balance that will actually drive the pet through its whole range.

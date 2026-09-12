@@ -326,6 +326,13 @@ static bool _pet_start_next_queued(pet_state_t *s) {
 static void _pet_anim_tick(pet_state_t *s) {
     const pet_anim_t *a = &_pet_anims[s->anim];
     uint8_t count = a->frames ? a->count : 1;
+    bool loop_here = a->loop;
+
+#if PET_DEBUG_CONTROLS
+    // Hold whatever is being previewed on screen, one-shots included, so it can
+    // be looked at for as long as it takes rather than flashing past once.
+    if (s->debug_preview) loop_here = true;
+#endif
 
     if (s->hold_left > 1) {
         s->hold_left--;
@@ -334,7 +341,7 @@ static void _pet_anim_tick(pet_state_t *s) {
 
     s->frame++;
     if (s->frame >= count) {
-        if (a->loop && s->queue_len == 0) {
+        if (loop_here && s->queue_len == 0) {
             s->frame = 0;
         } else if (!_pet_start_next_queued(s)) {
             _pet_rest(s);
@@ -377,6 +384,44 @@ static void _pet_rest(pet_state_t *s) {
     }
     _pet_start_anim(s, _pet_mood_anim(mood));
 }
+
+#if PET_DEBUG_CONTROLS
+// -- Development controls -----------------------------------------------------
+//
+// The pet's whole point is fourteen animations, but most of them only appear
+// when the clock says so: the Angry face wants most of a day of neglect, the
+// dead one a day and a half, snoring wants it to be 21:00. These two walk
+// through the lot on demand so art can be checked as it lands. See the button
+// map next to PET_DEBUG_CONTROLS in pet_face.h.
+
+// Step to the next animation and hold it. Walking off the end of the list hands
+// the screen back to the live pet, so repeated presses cycle through everything
+// and return, rather than sticking in preview with no way out.
+static void _pet_debug_next_anim(pet_state_t *s) {
+    pet_anim_id_t next = s->debug_preview ? (pet_anim_id_t) (s->anim + 1)
+                                          : PET_ANIM_HAPPY;
+    if (next >= PET_ANIM_COUNT) {
+        s->debug_preview = false;
+        _pet_rest(s);
+        return;
+    }
+    s->debug_preview = true;
+    s->queue_len = 0;
+    s->overlay = NULL;
+    _pet_start_anim(s, next);
+}
+
+// Push the mood up a tic at a time, wrapping past dead back to blissful, so
+// every threshold can be seen in order without waiting a day for each one.
+// _pet_rest sorts out the scene, including climbing back out of PET_SCENE_DEAD.
+static void _pet_debug_step_mood(pet_state_t *s) {
+    uint8_t next = s->quarter_tics + PET_TIC(1);
+    s->debug_preview = false;
+    s->quarter_tics = (next > PET_QT_DEAD) ? 0 : next;
+    s->awake_residual = 0;
+    _pet_rest(s);
+}
+#endif
 
 // ============================================================================
 // 5. Simulation
@@ -684,6 +729,9 @@ static void _pet_enter(pet_state_t *s) {
     s->nausea = 0;
     s->play_buffed = false;
     s->overlay = NULL;
+#if PET_DEBUG_CONTROLS
+    s->debug_preview = false;
+#endif
 
     pet_mood_t mood = _pet_mood(s);
     if (mood == PET_MOOD_DEAD) {
@@ -794,6 +842,23 @@ void pet_face_activate(void *context) {
 bool pet_face_loop(movement_event_t event, void *context) {
     pet_state_t *s = (pet_state_t *) context;
 
+#if PET_DEBUG_CONTROLS
+    // Any real interaction drops out of animation preview and hands the screen
+    // back to the pet, so you never have to remember how to escape it.
+    switch (event.event_type) {
+        case EVENT_LIGHT_BUTTON_UP:
+        case EVENT_LIGHT_LONG_PRESS:
+        case EVENT_ALARM_BUTTON_UP:
+        case EVENT_ALARM_LONG_PRESS:
+        case EVENT_SINGLE_TAP:
+        case EVENT_DOUBLE_TAP:
+            s->debug_preview = false;
+            break;
+        default:
+            break;
+    }
+#endif
+
     switch (event.event_type) {
         case EVENT_ACTIVATE:
             _pet_enter(s);
@@ -806,7 +871,11 @@ bool pet_face_loop(movement_event_t event, void *context) {
         // lighting the LED on press and from reacting to the long release.
         case EVENT_LIGHT_BUTTON_DOWN:
         case EVENT_LIGHT_LONG_UP:
+            break;
         case EVENT_LIGHT_REALLY_LONG_PRESS:
+#if PET_DEBUG_CONTROLS
+            _pet_debug_next_anim(s);
+#endif
             break;
         case EVENT_LIGHT_BUTTON_UP:
             _pet_feed_press(s);
@@ -831,7 +900,11 @@ bool pet_face_loop(movement_event_t event, void *context) {
 #endif
             break;
         case EVENT_ALARM_LONG_UP:
+            break;
         case EVENT_ALARM_REALLY_LONG_PRESS:
+#if PET_DEBUG_CONTROLS
+            _pet_debug_step_mood(s);
+#endif
             break;
 
         case EVENT_SINGLE_TAP:

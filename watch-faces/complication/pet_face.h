@@ -148,6 +148,19 @@
 // to a column beside the pet), so it can stay on as long as it's useful.
 #define PET_DEBUG_HUD               1
 
+// Development controls, for reviewing art and moods without waiting on the
+// clock — checking that the Angry animation looks right shouldn't mean
+// neglecting the pet for most of a day.
+//
+//   LIGHT held 1.5 s   step to the next animation and hold it on screen, one
+//                      at a time through all fourteen, then back to the live pet
+//   ALARM held 1.5 s   push the mood up one tic, wrapping past dead to blissful
+//
+// Both also fire their normal 0.5 s long-press on the way past — a hug, a
+// resurrect — because Movement delivers that before the 1.5 s event. Harmless
+// while previewing: the mood stepper overrides the state anyway.
+#define PET_DEBUG_CONTROLS          1
+
 // ---- Frames -----------------------------------------------------------------
 
 // THE FACE READS SIDEWAYS — the watch is turned 90 degrees clockwise, so the pet
@@ -321,6 +334,7 @@ typedef struct {
     uint16_t night_awake_ticks;
     uint16_t snore_ticks;
     bool     tap_enabled;
+    bool     debug_preview;     // PET_DEBUG_CONTROLS: an animation is held on screen
 } pet_state_t;
 
 void pet_face_setup(uint8_t watch_face_index, void ** context_ptr);
