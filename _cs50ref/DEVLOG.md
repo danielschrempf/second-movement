@@ -821,3 +821,178 @@ figure was wrong.
 The checks copy their constants from the firmware rather than including it, so a
 tunable changed in `pet_face.h` won't fail them until it is changed in both. The
 README says so, and says when to re-run each.
+
+---
+
+## Session 8 — the art lands, and the decoder gets rebuilt
+
+Twelve labelled exports arrived in `_cs50ref/FaceAnimations`, all 480×480 and
+drawn at 8 fps, which is the playback rate — so a frame in the file is a frame
+on the watch, and the sums are `frames ÷ 8 = seconds`.
+
+The first decode of `Happy.gif` came back as four segments. That was the thread
+that unravelled the whole decoder.
+
+**The decoder had been calibrated on a stream where everything moved.**
+`segmap.c` finds segments by looking for pixels that are dark in some frames and
+light in others. Run against the single 233-frame combined export that built the
+original calibration, nearly every segment changed at some point, so it found
+them all. Run against one short animation, a segment held lit for the whole clip
+never changes — and is therefore invisible. `Happy` decoded at all only by
+accident: it has four blank frames on the end, which made its otherwise-static
+mouth look like it was changing.
+
+Sharing one calibration across all the art fixed that, and immediately exposed a
+second failure underneath. With more varied art in the stream, **neighbouring
+segments that touch merge into one connected component** and get a single label.
+The merged blobs landed in the middle of their cells, so the geometric assignment
+called them `H` — in positions 5, 7 and 9, none of which have an `H` segment.
+Parsing `Classic_LCD_Display_Mapping` out of the firmware confirms it: only
+positions 0 and 1 carry the centre vertical, and the tie list is exactly
+`1B=1C`, `1E=1F`, `2A=2D=2G`, `4A=4D`, `6A=6D`.
+
+So the approach was wrong, not the calibration. **The LCD's geometry is fixed and
+known, and deriving it from the art was always the long way round.** `decode.py`
+now holds one measured box per cell and gets everything inside a cell from the
+seven-segment layout. It cannot invent a segment the hardware lacks, a static
+segment is no different from a moving one, and nothing can merge. Verified by
+repainting the decode and diffing it against the source: `extra` is zero
+everywhere, and the two read identically frame by frame.
+
+`segmap.c` is kept, but only for re-measuring the cell boxes if the canvas moves.
+
+**A second silent bug, unrelated and worse.** ffmpeg resamples a GIF to a
+constant frame rate by default, duplicating frames: the 16-frame exports were
+coming out as 48, while `ffprobe` still reported 16, so the decoder read the
+first 16 of 48 duplicates — a third of the animation, stretched. `-fps_mode
+passthrough` fixes it. This would have been near-impossible to spot from the
+output, since the result is a plausible-looking table.
+
+### What the art asked for that the engine hadn't allowed
+
+- **Poo and barf are whole scenes.** They were modelled as a detached blob on
+  the status layer; they are drawn as the pet doing something, with the floor
+  changing as a result. They now play on the character layer like any other
+  one-shot, and the status layer keeps only the pile that outlives them
+  (`PET_ANIM_PILE`). The pile's single pose is the poo animation's last frame,
+  `9 G|B|C` — which is exactly what had been guessed by hand, independently.
+- **Resurrect sweeps across cell 9.** The spirit drifts in from the right-hand
+  edge of the display, through the cell the status layer owned. Splitting cell 9
+  between the layers would have cut the entrance in half, so it is now shared.
+  That costs nothing: compositing is an `OR`, so neither layer can erase the
+  other, and the pet only resurrects with the floor already clean.
+  `check_layers.c` now asserts the sharing rather than disjointness.
+- **A blank tail on a loop is an artefact.** `Happy` carried four blank frames
+  and `Resurrect` one. Left in, a looping mood blinks the pet out of existence
+  for half a second every cycle. The decoder trims blanks at the ends, keeps
+  interior ones — those are how a flash is drawn — and says what it did.
+
+`PET_FRAMES(t)` fills in both the table pointer and the count from one macro, so
+they cannot drift apart when an animation is redrawn at a different length.
+
+### Upset and angry
+
+Drawn straight after, and they complete the set. The five moods escalate
+cleanly: happy is a smile, confused a flat mouth with a brow that shifts every
+second, upset drops the brow into a frown, and angry adds the verticals to that
+brow so it reads as a scowl. Upset and angry share the same mouth — cell 6's top
+edge and both verticals, an open frown once rotated — and differ only in cell 5
+above it, which is a nice economy: one cell carries the whole escalation.
+
+Seeing the four side by side also settled a labelling question. Confused had
+looked thin on its own — two poses, a flat mouth — and could have been a
+mislabelled *upset*. Next to the actual upset frown it is clearly the neutral,
+puzzled one. Nothing in the folder is mislabelled.
+
+Every animation now has art, so the label scaffold in `_pet_draw` is
+unreachable. It stays as the fallback for a row added to `_pet_anims` before its
+frames are drawn — a blank screen would be a worse failure than a name.
+
+### The sounds
+
+Dan's direction, and the thing that made it interesting: most of them are cued
+to a moment *inside* an animation rather than just fired alongside it. The
+snore's exhale belongs on the puff; the barf's slide starts as the contents
+leave the mouth; the poo knocks when the pile hits the bottom. So the pose
+timings came out of the decoded tables first and the sequences were written
+against them.
+
+The two clocks make this easy: sound durations are 1/64 s and animation ticks
+are 1/8 s, so **one tick is exactly 8 duration units** and a rest is how you
+wait for a frame.
+
+| Sound | Cue |
+| --- | --- |
+| Snore | High at tick 0, low at 9-12 where the puff is drawn in cell 1, twice — 4 s of figure inside the 6 s period |
+| Kiss | Chromatic trill from tick 6, as the pucker completes |
+| Eat | Mid chirp at tick 9 when the pip is swallowed, three lower chews at 10, 12, 14 |
+| Barf | "Uh oh" over the wriggling mouth at ticks 0-6, then a chromatic octave down from tick 9 as it enters cell 7 |
+| Poo | One short low knock at tick 9, as the pile reaches the bottom of cell 9 |
+| Play | Arpeggio up and back down, immediate; big is the same shape a whole tone up |
+
+Three of those are new — the spec only asks for four, but poo and the two plays
+read as silent moments without them.
+
+**The snore needed a fix to be cueable at all.** The sound ran on a 6 s timer
+while the animation looped every 2 s, entirely independently. They happened to
+stay 1 tick apart because 6 s is exactly three turns of the loop, but nothing
+enforced it and the first change to either length would have broken it. The
+animation is now restarted alongside the sound, so alignment holds by
+construction.
+
+That left a real fragility, and Dan pushed on it: the cue points were frame
+numbers written into a C array with nothing tying them to the art. Redraw an
+animation and every cue slides out from under it, silently.
+
+### Cues, not offsets
+
+The diagnosis that mattered: the drift was not caused by sound and animation
+being separate systems — that part is normal. It was caused by **writing down
+the offset when what was meant was the moment**. "Rest 72, then knock" is a fact
+about tick offsets; the intent was "knock when the pile hits the floor". Offsets
+are unstable under redraw. The moment is not.
+
+So the cue is now the thing stored, and the engine fires it on the frame where
+its condition first comes true:
+
+```c
+typedef struct {
+    uint8_t sound;
+    uint8_t position;       // the cell to watch
+    uint8_t mask;           // these segments... (0 = when the animation begins)
+    bool    on_clear;       // ...going dark, rather than lighting up
+    bool    once;           // only the first time, per play or per loop
+} pet_cue_t;
+```
+
+All four cued sounds mapped onto simple conditions, which is the test of whether
+an abstraction fits: the pile reaching cell 9's bottom edge, the contents
+lighting cell 7, the puff lighting cell 1, the jaw lighting cell 6's centre.
+Sounds became short phrases with no leading rests, and the chews stopped being
+hardcoded at three — cueing on the jaw means they follow the drawing.
+
+Two things fell out of the change:
+
+- **The snore timer disappeared.** Its 6 s period was wall-clock, which is why
+  it needed the animation restarted underneath it to stay in step. It is now
+  counted in breaths — two voiced out of every three — so the rhythm is defined
+  in terms of the animation and cannot drift from it. One tunable replaced two,
+  and a hack went with it.
+- **`once` exists because the check found a real bug.** Cell 7's `D` flickers as
+  the contents tumble through it, so the barf slide fired twice, the second
+  restarting the 9-tick ramp partway down and cutting it off. That would have
+  shipped. Everything fires once except the chew, which deliberately repeats.
+
+`check_sounds.py` was rewritten for the new invariant. Drift is no longer
+possible, but a quieter failure took its place: a cue whose condition never comes
+true is simply silent. So it replays each animation and reports where every cue
+lands, catches a cue repeating faster than its own sound can play, and flags any
+sound nothing reaches. Verified by pointing the poo cue at a cell the art never
+touches and by letting the slide repeat — it catches both.
+
+### Still outstanding
+
+Nothing. The face is feature-complete against the spec.
+
+Flash is 135,112 + 2,124 = 137,236 (56%), up 2,440 bytes over the pre-art
+baseline for fourteen animations, ten sounds and the cue engine.

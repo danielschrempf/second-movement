@@ -7,17 +7,25 @@ replaces the guts of a Casio F-91W). `origin` is the fork, `upstream` is Joey's 
 The active project is **`pet_face`** — a Tamagotchi-style virtual pet, built as a
 CS50x final project. Dan's design is the pseudo code in
 [CS50x Final Project.md](_cs50ref/CS50x%20Final%20Project.md); read it before
-changing pet behaviour. The LCD segment reference is
+changing pet behaviour. How the face behaves, from the wearer's side, is
+[MANUAL.md](_cs50ref/MANUAL.md) — the quickest way to recover the rules without
+reading the state machine. The LCD segment reference is
 [SEGMENT_MAP.md](_cs50ref/SEGMENT_MAP.md) — which also holds the region map
 saying which cells each part of the pet owns — and [DEVLOG.md](_cs50ref/DEVLOG.md)
 is the process log, appended to as work lands. Every ambiguity in the spec has
-been settled, with the reasoning recorded where it applies; `TODO` in
-`pet_face.c` marks the work still outstanding.
+been settled, with the reasoning recorded where it applies.
 
-Animations are drawn as segment art on an F-91W template and exported as GIFs.
-They are not transcribed by hand — `_cs50ref/tools/decode.sh` converts one into
-a paste-ready `pet_frame_t` table, and `--check` reports any frame that lights
-half of a tied segment pair and so can't render as drawn. That directory also
+Sounds are attached to animations as cues — "when cell 9's bottom edge lights"
+rather than a time — so they follow the art when it is redrawn. A cue whose
+condition never comes true is silent rather than wrong, so **run
+`_cs50ref/tools/check_sounds.py` after redrawing any animation**; it replays each
+one and reports where every cue lands.
+
+Animations are drawn as segment art on an F-91W template and exported as GIFs
+into [_cs50ref/FaceAnimations](_cs50ref/FaceAnimations). They are not
+transcribed by hand — `_cs50ref/tools/decode.sh` converts one into a paste-ready
+`pet_frame_t` table, and `--check` reports any frame that lights half of a tied
+segment pair (so can't render as drawn) along with the cells the art touches. That directory also
 holds the harnesses for the layer regions, the waking-time maths and the balance
 simulation; [its README](_cs50ref/tools/README.md) says when to re-run each.
 
@@ -81,7 +89,7 @@ explicitly, as in the command above.
 **3. Flash budget.** Usable flash is `0x40000 - 0x2000 (bootloader) - 0x2000
 (eeprom)` = **245,760 bytes**. Too many faces in `movement_config.h` is a
 compile error, not a runtime surprise. Current build on the PC (GCC 14.2):
-132,752 text + 2,044 data = 134,796 (55%, ~108 KB free). RAM is 32 KB.
+135,112 text + 2,124 data = 137,236 (56%, ~106 KB free). RAM is 32 KB.
 
 Expect the two machines to report *different* sizes — the ARM GCC versions
 differ. GCC 15.3 also emits warning classes the PC's older GCC doesn't (e.g.
