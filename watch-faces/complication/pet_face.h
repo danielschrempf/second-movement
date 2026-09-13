@@ -54,8 +54,9 @@
  * Spec: _cs50ref/CS50x Final Project.md, with the reasoning behind every
  * departure from it recorded in _cs50ref/DEVLOG.md.
  *
- * TODO in pet_face.c marks work still outstanding: the character animation
- * frames and the four sounds.
+ * The art and the sounds are all in. Several sounds are cued to specific frames
+ * of their animation -- _cs50ref/tools/check_sounds.py asserts they still line
+ * up, and wants running after any redraw.
  */
 
 // ---- Tunables ---------------------------------------------------------------
@@ -94,6 +95,9 @@
 #define PET_POO_DELAY_SECONDS       (2 * PET_SECONDS_PER_TIC)
 // An unswept poo accrues at the same rate as passive decay, so it doubles it.
 #define PET_POO_SECONDS_PER_QT      (PET_SECONDS_PER_QT)
+// How recently a poo must have landed for the scene to be worth playing. Past
+// this it is history, and only the pile shows.
+#define PET_POO_FRESH_SECONDS       60
 
 // Feeding
 #define PET_FOOD_MAX                4
@@ -121,8 +125,13 @@
 // How long a disturbed pet stays up before settling again.
 #define PET_NIGHT_AWAKE_SECONDS     30
 
-// Snoring repeats on this period; one beep on nodding off is easy to miss.
-#define PET_SNORE_PERIOD_SECONDS    6
+// The pet breathes continuously while it sleeps, but is only audible on some of
+// those breaths -- otherwise the snore never lets up. Two voiced out of every
+// three is what gives it its rhythm. Counted in breaths rather than seconds so
+// it stays tied to the animation: the sound cannot drift out of step with the
+// thing it is describing.
+#define PET_SNORE_BREATH_CYCLE      3
+#define PET_SNORE_AUDIBLE_BREATHS   2
 
 // Tick rate while the face is on screen. Every timer above is counted in
 // these ticks; the pet is drawn at most this often.
@@ -256,13 +265,37 @@ typedef struct {
     uint8_t flags;
 } pet_layer_def_t;
 
+// A sound cued to a moment in the art rather than to a time.
+//
+// The engine fires the cue on the frame where its condition first comes true,
+// so what gets written down is "when the pile reaches the floor" rather than
+// "1.125 seconds in". The difference matters because frame timings move every
+// time an animation is redrawn and the meaning doesn't: a cue follows the
+// drawing, where an offset silently stops matching it.
 typedef struct {
-    const char *label;          // drawn instead of frames while frames == NULL
+    uint8_t sound;              // pet_sound_id_t to play
+    uint8_t position;           // the cell to watch
+    uint8_t mask;               // these segments... (0 = when the animation begins)
+    bool    on_clear;           // ...going dark, rather than lighting up
+    bool    once;               // only the first time, per play or per loop
+} pet_cue_t;
+
+typedef struct {
+    const char *label;          // fallback if a row has no frames yet
     const pet_frame_t *frames;
     uint8_t count;
     bool loop;
     pet_layer_id_t layer;       // which layer this animation plays on
+    const pet_cue_t *cues;      // sounds, cued to frames of this animation
+    uint8_t cue_count;
 } pet_anim_t;
+
+// Fills in both `frames` and `count` from one table, so the two can never drift
+// apart when an animation is redrawn and comes back a different length.
+#define PET_FRAMES(t)   (t), (uint8_t) (sizeof(t) / sizeof((t)[0]))
+#define PET_NO_FRAMES   NULL, 0
+#define PET_CUES(t)     (t), (uint8_t) (sizeof(t) / sizeof((t)[0]))
+#define PET_NO_CUES     NULL, 0
 
 // One layer's playback position.
 typedef struct {
@@ -270,6 +303,7 @@ typedef struct {
     uint8_t idle;               // what to fall back to when a one-shot ends
     uint8_t frame;
     uint8_t hold_left;
+    uint8_t cues_fired;         // bit per cue, for the ones that fire once
 } pet_layer_t;
 
 // Every animation in the spec's checklist.
@@ -291,14 +325,30 @@ typedef enum {
     PET_ANIM_KISS,
     PET_ANIM_SNORE,
     PET_ANIM_WAKE,
+    // the status layer's only animation: the pile left behind, which stays put
+    // until it is swept. POO and BARF above are the scenes that produce it, and
+    // they play on the character layer like any other one-shot.
+    PET_ANIM_PILE,
     PET_ANIM_COUNT
 } pet_anim_id_t;
 
+// The spec asks for four; poo and the two play flourishes were added because
+// those moments read as silent without them.
+//
+// Some are in two parts, because the two halves are cued to different moments
+// of the same animation -- the barf's "uh oh" plays over the wriggling mouth,
+// and the slide waits until the contents are actually on their way.
 typedef enum {
-    PET_SOUND_SNORE = 0,
+    PET_SOUND_SNORE_IN = 0,
+    PET_SOUND_SNORE_OUT,
     PET_SOUND_KISS,
-    PET_SOUND_BARF,
-    PET_SOUND_EAT,
+    PET_SOUND_BARF_UHOH,
+    PET_SOUND_BARF_SLIDE,
+    PET_SOUND_EAT_GULP,
+    PET_SOUND_EAT_CHEW,
+    PET_SOUND_POO,
+    PET_SOUND_PLAY_SMALL,
+    PET_SOUND_PLAY_BIG,
     PET_SOUND_COUNT
 } pet_sound_id_t;
 
@@ -362,8 +412,9 @@ typedef struct {
     uint16_t play_ticks;
     uint8_t  nausea;
     bool     play_buffed;       // did this play session actually earn the buff?
+    bool     poo_pending;       // a poo just landed; play the scene when idle
     uint16_t night_awake_ticks;
-    uint16_t snore_ticks;
+    uint8_t  breath;            // which breath of the snore cycle we are on
     bool     tap_enabled;
     bool     debug_preview;     // PET_DEBUG_CONTROLS: an animation is held on screen
     uint8_t  preview_anim;      // ... and which one, so stepping walks the list

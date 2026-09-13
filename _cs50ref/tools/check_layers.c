@@ -1,6 +1,11 @@
-// Checks the layer ownership invariant: no two layers may claim the same
-// segment, or one layer's art silently lights another's cell. Masks copied
-// verbatim from pet_face.c.
+// Checks the layer ownership rules: the cells drawn from state are off limits
+// to every layer, and masking really does contain a frame that misbehaves.
+// Masks copied verbatim from pet_face.c.
+//
+// Cell 9 is deliberately shared between the character and the status layer --
+// resurrect sweeps the spirit across it -- so this does NOT check the two for
+// disjointness. Compositing is an OR, so sharing cannot lose anything; what
+// matters is that the procedural cells stay clear.
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -25,8 +30,7 @@ enum { PET_LAYER_CHARACTER = 0, PET_LAYER_STATUS, PET_LAYER_COUNT };
 
 static const pet_layer_def_t _pet_layers[PET_LAYER_COUNT] = {
     [PET_LAYER_CHARACTER] = {
-        { 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-          SEG_A | SEG_D | SEG_E | SEG_F },
+        { 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF },
         PET_FRAME_COLON,
     },
     [PET_LAYER_STATUS] = {
@@ -45,17 +49,18 @@ static void ok(const char *what, bool cond) {
 
 int main(void) {
     const char *names[] = { "character", "status" };
-    puts("layer ownership is disjoint\n");
+    puts("layer ownership\n");
 
-    // Every animated layer pair, every position.
+    // The layers may share cell 9, and only cell 9. An overlap anywhere else
+    // would mean two independently timed animations fighting over one cell.
     for (int a = 0; a < PET_LAYER_COUNT; a++)
         for (int b = a + 1; b < PET_LAYER_COUNT; b++) {
             bool clean = true;
             for (int p = 0; p < 10; p++)
-                if (_pet_layers[a].seg[p] & _pet_layers[b].seg[p]) clean = false;
+                if (p != 9 && (_pet_layers[a].seg[p] & _pet_layers[b].seg[p])) clean = false;
             if (_pet_layers[a].flags & _pet_layers[b].flags) clean = false;
             char buf[80];
-            snprintf(buf, sizeof buf, "%s vs %s share no segment", names[a], names[b]);
+            snprintf(buf, sizeof buf, "%s vs %s overlap only in cell 9", names[a], names[b]);
             ok(buf, clean);
         }
 
@@ -71,10 +76,11 @@ int main(void) {
         ok(buf, !(_pet_layers[l].seg[PET_BUFF_POSITION] & buff_mask));
     }
 
-    // Position 9 is the shared cell: together the two layers must cover all
-    // seven of its segments exactly once, with none left stranded.
-    uint8_t nine = _pet_layers[PET_LAYER_CHARACTER].seg[9] | _pet_layers[PET_LAYER_STATUS].seg[9];
-    ok("position 9 fully allocated (A-G, no H)", nine == 0x7F);
+    // The status layer wants the pile: cell 9's centre and bottom edge.
+    ok("status layer owns cell 9's G, B and C",
+       (_pet_layers[PET_LAYER_STATUS].seg[9] & (SEG_G|SEG_B|SEG_C)) == (SEG_G|SEG_B|SEG_C));
+    ok("character can reach all of cell 9 (resurrect sweeps it)",
+       _pet_layers[PET_LAYER_CHARACTER].seg[9] == 0xFF);
     ok("food pips are 4 distinct segments", __builtin_popcount(food_mask) == 4);
 
     // Position 2 was freed when the HUD was dropped; nothing should claim it.
@@ -88,8 +94,10 @@ int main(void) {
     for (int p = 0; p < 10; p++) fb[p] |= rogue[p] & _pet_layers[PET_LAYER_CHARACTER].seg[p];
     ok("a character frame with every bit set can't reach pos 0/2/3",
        fb[0] == 0 && fb[2] == 0 && fb[3] == 0);
-    ok("...nor position 9's poo segments",
-       !(fb[9] & (SEG_G | SEG_B | SEG_C)));
+    uint8_t sfb[10] = {0};
+    for (int p = 0; p < 10; p++) sfb[p] |= rogue[p] & _pet_layers[PET_LAYER_STATUS].seg[p];
+    ok("a status frame with every bit set reaches only cell 9's pile",
+       sfb[9] == (SEG_G|SEG_B|SEG_C) && !sfb[0] && !sfb[4] && !sfb[8]);
 
     printf("\n%s\n", fails ? "FAILURES ABOVE" : "all checks passed");
     return fails != 0;

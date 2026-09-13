@@ -45,34 +45,25 @@
 // 1. Animations and sounds
 // ============================================================================
 
-// TODO: the character animations. Each one becomes a table of frames; point its
-// row of _pet_anims at it and set count. Until then the 6-character label is
-// drawn in the main line, so the state machine stays testable without art.
-//
-// Frames are generated from the drawn animations rather than written by hand —
-// the exports are segment art on an F-91W template, which decodes to masks
-// directly. See DEVLOG.md for that pipeline. The segment geometry and the
-// per-cell constraints are in pet_face.h; the full table is in SEGMENT_MAP.md.
-//
-// A table looks like this. Note PET_FRAME_COLON carrying the eyes — they are
-// one segment, so open and shut is all they do, and the blink is this frame:
-//
-//   static const pet_frame_t _pet_frames_happy[] = {
-//       //  0         1         2         3         4         5         6            7         8         9          flags            hold
-//       { { SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_B|SEG_C, SEG_NONE, SEG_NONE, SEG_NONE }, PET_FRAME_COLON, 16 },
-//       { { SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_NONE, SEG_B|SEG_C, SEG_NONE, SEG_NONE, SEG_NONE }, 0,                2 },
-//   };
-//   ... and in _pet_anims:  [PET_ANIM_HAPPY] = { "HAPPY ", _pet_frames_happy, 2, true, PET_LAYER_CHARACTER },
-
 // What each layer is allowed to light. Anything a frame sets outside its own
 // cells is masked off by the compositor, so one stray segment in the art can't
-// invade a neighbour. Position 9 is the shared one: the character has its top
-// edge and both verticals, the status layer the centre and bottom.
+// invade a neighbour.
+//
+// Cells 0, 2 and 3 are barred to both layers: those are drawn straight from
+// state -- the buff sign and the food pips -- and no animation may touch them.
+//
+// Cell 9 is shared rather than split. The status layer only ever wants its
+// centre and bottom edge, but the character reaches across the whole of it:
+// worn sideways the main line runs top to bottom, cell 9 is the far end, and
+// the resurrect animation rises the spirit up from there through the whole
+// line. Clipping that would cut the entrance in half. Sharing is safe
+// because compositing is a straight OR -- neither layer can erase the other,
+// and the two are never both drawing in cell 9 at once anyway, since the pet
+// only resurrects when there is nothing on the floor.
 static const pet_layer_def_t _pet_layers[PET_LAYER_COUNT] = {
     [PET_LAYER_CHARACTER] = {
-        //   0     1     2     3     4     5     6     7     8    9 (partial)
-        { 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-          SEG_A | SEG_D | SEG_E | SEG_F },
+        //   0     1     2     3     4     5     6     7     8     9
+        { 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF },
         PET_FRAME_COLON,
     },
     [PET_LAYER_STATUS] = {
@@ -87,54 +78,406 @@ static const pet_layer_def_t _pet_layers[PET_LAYER_COUNT] = {
 // right, top left.
 static const uint8_t _pet_food_pips[PET_FOOD_MAX] = { SEG_B, SEG_C, SEG_F, SEG_E };
 
-// Poo: sideways, G is the centre vertical and B|C the bottom edge — a stem
-// standing on a base. It just sits there until swept, so one frame that loops.
+// The character animations, decoded from the drawn exports rather than written
+// by hand: see _cs50ref/tools/decode.sh, which also checks that no frame lights
+// half of a tied segment pair, and reports which cells the drawing touches.
+//
+// Frames are (segments per position, flags, hold), where hold is in ticks at
+// PET_ANIM_HZ -- 8 is one second. Consecutive identical poses are collapsed
+// into one held frame by the decoder, so these tables are shorter than the
+// exports they came from.
+
+// The resting mood. The mouth holds; the eyes -- the colon, one
+// segment, so open and shut is all they do -- carry the blink.
+static const pet_frame_t _pet_frames_happy[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  6 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  5 },
+};
+// 16 frames -> 7 poses
+
+static const pet_frame_t _pet_frames_confused[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  8 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_C|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  8 },
+};
+// 16 frames -> 2 poses
+
+// The brow drops and the mouth turns down. Upset and angry share a mouth --
+// cell 6's top edge and both verticals, an open frown once rotated -- and
+// differ in the brow above it, which gains its verticals as a scowl.
+static const pet_frame_t _pet_frames_upset[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  8 },
+};
+// 16 frames -> 7 poses
+
+static const pet_frame_t _pet_frames_angry[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_A|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  8 },
+};
+// 16 frames -> 7 poses
+
+// A tombstone. Nothing moves, so one pose.
+static const pet_frame_t _pet_frames_dead[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_G, SEG_G    , SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D }, 0              ,  4 },
+};
+// 4 frames -> 1 poses
+
+// The tombstone shrinks away and the spirit drifts back in from the
+// right, growing into the pet. It sweeps the whole main line, cell 9 included.
+static const pet_frame_t _pet_frames_resurrect[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_G, SEG_G    , SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_G, SEG_G    , SEG_A|SEG_D|SEG_E|SEG_F }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_G, SEG_G     }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_G }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_G     }, 0              ,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_D    , SEG_E|SEG_G }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_D|SEG_E, SEG_E     }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_D|SEG_E|SEG_F, SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B    , SEG_E|SEG_F, SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B, SEG_F    , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_F, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_E|SEG_F, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D, SEG_E|SEG_F, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_E, SEG_E    , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_C|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  6 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+};
+// 32 frames -> 25 poses
+
+static const pet_frame_t _pet_frames_play_small[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A    , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_F    , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E    , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_D    , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  2 },
+};
+// 16 frames -> 13 poses
+
+static const pet_frame_t _pet_frames_play_big[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  2 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D, SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A    , SEG_NONE , SEG_B    , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_F    , SEG_NONE , SEG_A    , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_E, SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_D|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E    , SEG_NONE , SEG_D    , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_D    , SEG_NONE , SEG_C    , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_D, SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+};
+// 16 frames -> 15 poses
+
+static const pet_frame_t _pet_frames_eat[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  4 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  2 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_E|SEG_F, SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  2 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_E|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_E|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_E|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  5 },
+};
+// 21 frames -> 12 poses
+
+static const pet_frame_t _pet_frames_kiss[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  4 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  2 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_D    , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  2 },
+    { { SEG_NONE , SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_A|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_A    , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  3 },
+};
+// 16 frames -> 9 poses
+
+static const pet_frame_t _pet_frames_snore[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_F|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D|SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  8 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_D    , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_A|SEG_G, SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_A    , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  3 },
+};
+// 16 frames -> 7 poses
+
+static const pet_frame_t _pet_frames_wake[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_E    , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_D    , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_G    , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_E    , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_G    , SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+};
+// 21 frames -> 17 poses
+
+// The pet squats and the pile lands in cell 9. The character layer
+// draws the squat, the status layer keeps the pile afterwards -- see
+// _pet_frames_pile, whose single pose is this animation's last.
 static const pet_frame_t _pet_frames_poo[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  2 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_G    , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_G    , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_G     }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_G    , SEG_NONE , SEG_B|SEG_C }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_G    , SEG_B|SEG_C }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_G }, PET_FRAME_COLON,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_G }, PET_FRAME_COLON,  2 },
+};
+// 16 frames -> 10 poses
+
+static const pet_frame_t _pet_frames_barf[] = {
+    //  0         1         2         3         4         5         6         7         8         9            flags            hold
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_D|SEG_E|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_C|SEG_D|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_D|SEG_E|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_C|SEG_D|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_B|SEG_D|SEG_E|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_C|SEG_D|SEG_F|SEG_G, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_F, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  3 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_D    , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_D|SEG_G, SEG_D    , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_G    , SEG_D|SEG_G, SEG_D     }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_D    , SEG_NONE , SEG_C|SEG_D|SEG_G }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_D    , SEG_NONE , SEG_B|SEG_C|SEG_G }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_D|SEG_G, SEG_D    , SEG_B|SEG_C }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_G    , SEG_D|SEG_G, SEG_B|SEG_C|SEG_D }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_G    , SEG_B|SEG_C|SEG_D|SEG_G }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_B|SEG_C|SEG_G }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_B|SEG_C }, PET_FRAME_COLON,  2 },
+};
+// 20 frames -> 17 poses
+
+// What stays on the floor once the poo animation has played out: the stem and
+// its base, cell 9's centre and bottom edge. Sits there until swept, so one
+// frame that loops. This is the status layer's whole vocabulary.
+static const pet_frame_t _pet_frames_pile[] = {
     //  0  1  2  3  4  5  6  7  8  9                                flags  hold
     { { 0, 0, 0, 0, 0, 0, 0, 0, 0, SEG_G | SEG_B | SEG_C },            0,  PET_ANIM_HZ },
 };
 
-// Barf: the base without the stem — a puddle rather than a pile.
-static const pet_frame_t _pet_frames_barf[] = {
-    { { 0, 0, 0, 0, 0, 0, 0, 0, 0, SEG_B | SEG_C },                    0,  PET_ANIM_HZ * 2 },
+// Where each sound belongs, written as the moment rather than the timing. A cue
+// with no mask fires as the animation begins; otherwise it fires on the frame
+// where those segments light (or, with on_clear, go dark).
+//
+// Every condition here is checked against the art by tools/check_sounds.py --
+// a cue whose moment never arrives is as silent a failure as one that drifted.
+
+// Breathe in as the loop starts, out as the puff appears beside the mouth.
+static const pet_cue_t _pet_cues_snore[] = {
+    { PET_SOUND_SNORE_IN,  0, 0,     false, true  },
+    { PET_SOUND_SNORE_OUT, 1, SEG_D, false, true  },
+};
+
+// The pucker is the first frame to light cell 6's centre.
+static const pet_cue_t _pet_cues_kiss[] = {
+    { PET_SOUND_KISS, 6, SEG_G, false, true },
+};
+
+// The pip sits in cell 7 until it is swallowed, and the jaw works in cell 6 --
+// the chew is the one cue that deliberately repeats, so it follows the drawing
+// however many times the jaw is animated.
+static const pet_cue_t _pet_cues_eat[] = {
+    { PET_SOUND_EAT_GULP, 7, 0xFF,  true,  true  },
+    { PET_SOUND_EAT_CHEW, 6, SEG_G, false, false },
+};
+
+// Uh oh as it starts; the slide once the contents reach the minutes-ones cell.
+// The slide fires once: cell 7 flickers as the contents tumble through it, and
+// without that the ramp would restart partway down and cut itself off.
+static const pet_cue_t _pet_cues_barf[] = {
+    { PET_SOUND_BARF_UHOH,  0, 0,     false, true },
+    { PET_SOUND_BARF_SLIDE, 7, SEG_D, false, true },
+};
+
+// The knock lands when the pile reaches the bottom edge of cell 9.
+static const pet_cue_t _pet_cues_poo[] = {
+    { PET_SOUND_POO, 9, SEG_B | SEG_C, false, true },
+};
+
+static const pet_cue_t _pet_cues_play_small[] = {
+    { PET_SOUND_PLAY_SMALL, 0, 0, false, true },
+};
+
+static const pet_cue_t _pet_cues_play_big[] = {
+    { PET_SOUND_PLAY_BIG, 0, 0, false, true },
 };
 
 static const pet_anim_t _pet_anims[PET_ANIM_COUNT] = {
-    //                          label     frames              count  loop   layer
-    [PET_ANIM_NONE]       = { "      ",  NULL,                0,     false, PET_LAYER_CHARACTER },
+    //                          label     frames and count                    loop   layer                cues and count
+    [PET_ANIM_NONE]       = { "      ",  PET_NO_FRAMES,                       false, PET_LAYER_CHARACTER, PET_NO_CUES },
     // moods: loop while the pet rests
-    [PET_ANIM_HAPPY]      = { "HAPPY ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
-    [PET_ANIM_CONFUSED]   = { "CONFUS",  NULL,                0,     true,  PET_LAYER_CHARACTER },
-    [PET_ANIM_UPSET]      = { "UPSET ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
-    [PET_ANIM_ANGRY]      = { "ANGRY ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
-    [PET_ANIM_DEAD]       = { "DEAD  ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
+    [PET_ANIM_HAPPY]      = { "HAPPY ",  PET_FRAMES(_pet_frames_happy),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_CONFUSED]   = { "CONFUS",  PET_FRAMES(_pet_frames_confused),    true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_UPSET]      = { "UPSET ",  PET_FRAMES(_pet_frames_upset),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_ANGRY]      = { "ANGRY ",  PET_FRAMES(_pet_frames_angry),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_DEAD]       = { "DEAD  ",  PET_FRAMES(_pet_frames_dead),        true,  PET_LAYER_CHARACTER, PET_NO_CUES },
     // one-shots
-    [PET_ANIM_RESURRECT]  = { "GHOST ",  NULL,                0,     false, PET_LAYER_CHARACTER },
-    [PET_ANIM_PLAY_SMALL] = { "PLAY 1",  NULL,                0,     false, PET_LAYER_CHARACTER },
-    [PET_ANIM_PLAY_BIG]   = { "PLAY 2",  NULL,                0,     false, PET_LAYER_CHARACTER },
-    [PET_ANIM_EAT]        = { "EAT   ",  NULL,                0,     false, PET_LAYER_CHARACTER },
-    [PET_ANIM_KISS]       = { "KISS  ",  NULL,                0,     false, PET_LAYER_CHARACTER },
-    [PET_ANIM_SNORE]      = { "SNORE ",  NULL,                0,     true,  PET_LAYER_CHARACTER },
-    [PET_ANIM_WAKE]       = { "WAKE  ",  NULL,                0,     false, PET_LAYER_CHARACTER },
-    // the status layer: what's on the floor, drawn beside the pet in cell 9
-    [PET_ANIM_POO]        = { "POO   ",  _pet_frames_poo,     1,     true,  PET_LAYER_STATUS },
-    [PET_ANIM_BARF]       = { "BARF  ",  _pet_frames_barf,    1,     false, PET_LAYER_STATUS },
+    [PET_ANIM_RESURRECT]  = { "GHOST ",  PET_FRAMES(_pet_frames_resurrect),   false, PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_PLAY_SMALL] = { "PLAY 1",  PET_FRAMES(_pet_frames_play_small),  false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_play_small) },
+    [PET_ANIM_PLAY_BIG]   = { "PLAY 2",  PET_FRAMES(_pet_frames_play_big),    false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_play_big) },
+    [PET_ANIM_EAT]        = { "EAT   ",  PET_FRAMES(_pet_frames_eat),         false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_eat) },
+    [PET_ANIM_KISS]       = { "KISS  ",  PET_FRAMES(_pet_frames_kiss),        false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_kiss) },
+    [PET_ANIM_SNORE]      = { "SNORE ",  PET_FRAMES(_pet_frames_snore),       true,  PET_LAYER_CHARACTER, PET_CUES(_pet_cues_snore) },
+    [PET_ANIM_WAKE]       = { "WAKE  ",  PET_FRAMES(_pet_frames_wake),        false, PET_LAYER_CHARACTER, PET_NO_CUES },
+    // Scenes: the pet does something and leaves cell 9 changed. Drawn as whole
+    // scenes rather than as a detached blob, so they play on the character
+    // layer; the status layer keeps whatever is left on the floor afterwards.
+    [PET_ANIM_POO]        = { "POO   ",  PET_FRAMES(_pet_frames_poo),         false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_poo) },
+    [PET_ANIM_BARF]       = { "BARF  ",  PET_FRAMES(_pet_frames_barf),        false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_barf) },
+    // the status layer: what stays on the floor
+    [PET_ANIM_PILE]       = { "PILE  ",  PET_FRAMES(_pet_frames_pile),        true,  PET_LAYER_STATUS,    PET_NO_CUES },
 };
 
-// TODO: compose the four sounds. Format is note, duration, ..., 0, with
-// durations in 1/64 s; a negative value rewinds that many notes and the value
-// after it is the repeat count. Notes are in watch_tcc.h. These single beeps
-// only exist so you can hear which hook fired.
-static int8_t _pet_sound_snore[] = { BUZZER_NOTE_C4, 16, 0 };
-static int8_t _pet_sound_kiss[]  = { BUZZER_NOTE_C7,  6, 0 };
-static int8_t _pet_sound_barf[]  = { BUZZER_NOTE_E4, 16, 0 };
-static int8_t _pet_sound_eat[]   = { BUZZER_NOTE_C6,  4, 0 };
+
+// The sounds. Format is note, duration, ..., 0, with durations in 1/64 s; a
+// negative value rewinds that many notes and the value after it is the repeat
+// count. Notes are in watch_tcc.h.
+//
+// These are phrases, not timelines: none of them waits for anything. Where a
+// sound belongs to a particular moment of an animation, the waiting is the
+// cue's job -- see _pet_cues_* below -- so nothing here needs re-timing when
+// art is redrawn.
+//
+// Everything also flashes SIGNAL, so on a silent watch the timing still reads.
+
+static int8_t _pet_sound_snore_in[]  = { BUZZER_NOTE_C6, 32, 0 };
+static int8_t _pet_sound_snore_out[] = { BUZZER_NOTE_C5, 32, 0 };
+
+// Chromatic, up and quick, riding the kiss out of the pucker.
+static int8_t _pet_sound_kiss[] = {
+    BUZZER_NOTE_C6,              3,
+    BUZZER_NOTE_C6SHARP_D6FLAT,  3,
+    BUZZER_NOTE_D6,              3,
+    BUZZER_NOTE_D6SHARP_E6FLAT,  3,
+    BUZZER_NOTE_E6,              3,
+    BUZZER_NOTE_F6,              4,
+    0
+};
+
+static int8_t _pet_sound_eat_gulp[] = { BUZZER_NOTE_E6, 6, 0 };
+static int8_t _pet_sound_eat_chew[] = { BUZZER_NOTE_G5, 6, 0 };
+
+// Two falling notes over the wriggling mouth: the pet knows what is coming.
+static int8_t _pet_sound_barf_uhoh[] = {
+    BUZZER_NOTE_A5, 24,
+    BUZZER_NOTE_F5, 24,
+    0
+};
+
+// ... and then a chromatic octave down, travelling with it.
+static int8_t _pet_sound_barf_slide[] = {
+    BUZZER_NOTE_C6,              6,
+    BUZZER_NOTE_B5,              6,
+    BUZZER_NOTE_A5SHARP_B5FLAT,  6,
+    BUZZER_NOTE_A5,              6,
+    BUZZER_NOTE_G5SHARP_A5FLAT,  6,
+    BUZZER_NOTE_G5,              6,
+    BUZZER_NOTE_F5SHARP_G5FLAT,  6,
+    BUZZER_NOTE_F5,              6,
+    BUZZER_NOTE_E5,              6,
+    BUZZER_NOTE_D5SHARP_E5FLAT,  6,
+    BUZZER_NOTE_D5,              6,
+    BUZZER_NOTE_C5SHARP_D5FLAT,  6,
+    0
+};
+
+// One short low knock, nothing more.
+static int8_t _pet_sound_poo[] = { BUZZER_NOTE_C4, 5, 0 };
+
+// Playing is a reward. Big is the same shape a whole tone up.
+static int8_t _pet_sound_play_small[] = {
+    BUZZER_NOTE_C5, 5, BUZZER_NOTE_E5, 5, BUZZER_NOTE_G5, 5, BUZZER_NOTE_C6, 5,
+    BUZZER_NOTE_G5, 5, BUZZER_NOTE_E5, 5, BUZZER_NOTE_C5, 5,
+    0
+};
+
+static int8_t _pet_sound_play_big[] = {
+    BUZZER_NOTE_D5, 5, BUZZER_NOTE_F5SHARP_G5FLAT, 5, BUZZER_NOTE_A5, 5, BUZZER_NOTE_D6, 5,
+    BUZZER_NOTE_A5, 5, BUZZER_NOTE_F5SHARP_G5FLAT, 5, BUZZER_NOTE_D5, 5,
+    0
+};
 
 static int8_t *_pet_sounds[PET_SOUND_COUNT] = {
-    [PET_SOUND_SNORE] = _pet_sound_snore,
-    [PET_SOUND_KISS]  = _pet_sound_kiss,
-    [PET_SOUND_BARF]  = _pet_sound_barf,
-    [PET_SOUND_EAT]   = _pet_sound_eat,
+    [PET_SOUND_SNORE_IN]   = _pet_sound_snore_in,
+    [PET_SOUND_SNORE_OUT]  = _pet_sound_snore_out,
+    [PET_SOUND_KISS]       = _pet_sound_kiss,
+    [PET_SOUND_BARF_UHOH]  = _pet_sound_barf_uhoh,
+    [PET_SOUND_BARF_SLIDE] = _pet_sound_barf_slide,
+    [PET_SOUND_EAT_GULP]   = _pet_sound_eat_gulp,
+    [PET_SOUND_EAT_CHEW]   = _pet_sound_eat_chew,
+    [PET_SOUND_POO]        = _pet_sound_poo,
+    [PET_SOUND_PLAY_SMALL] = _pet_sound_play_small,
+    [PET_SOUND_PLAY_BIG]   = _pet_sound_play_big,
 };
 
 // The one funnel every sound passes through, so SIGNAL is flashed here too —
@@ -270,8 +613,10 @@ static void _pet_draw(const pet_state_t *s) {
         const pet_anim_t *a = &_pet_anims[s->layer[l].anim];
         if (s->layer[l].anim == PET_ANIM_NONE) continue;
         if (a->frames == NULL) {
-            // No art for this one yet. The character's label stands in below;
-            // any other layer simply draws nothing.
+            // Every animation has art now, so nothing reaches this. It stays as
+            // the fallback for a row added to _pet_anims before its frames are
+            // drawn: the character's name stands in below rather than the face
+            // going blank, and any other layer simply draws nothing.
             if (l == PET_LAYER_CHARACTER) label = a->label;
             continue;
         }
@@ -297,8 +642,8 @@ static void _pet_draw(const pet_state_t *s) {
     for (uint8_t p = 0; p < 10; p++) _pet_draw_position(p, fb[p]);
     _pet_draw_flags(flags);
 
-    // Scaffold until the character art lands: its name in positions 4-8. Cell 9
-    // is left alone so the poo beside it still shows.
+    // The fallback above: the animation's name in positions 4-8. Cell 9 is left
+    // alone so the pile still shows beside it.
     if (label) {
         for (uint8_t i = 0; i < 5 && label[i]; i++) watch_display_character(label[i], 4 + i);
     }
@@ -329,12 +674,63 @@ static bool _pet_anim_busy(const pet_state_t *s) {
     return id != PET_ANIM_NONE && !_pet_anims[id].loop;
 }
 
+// Some cues are rate-limited by the scene rather than by the art. The pet
+// breathes on every turn of the sleep loop, but snoring on every one of them
+// never lets up; voicing two breaths in three is what gives it a rhythm.
+static bool _pet_cue_audible(const pet_state_t *s, pet_sound_id_t id) {
+    if (id == PET_SOUND_SNORE_IN || id == PET_SOUND_SNORE_OUT) {
+        return s->breath < PET_SNORE_AUDIBLE_BREATHS;
+    }
+    return true;
+}
+
+// Fire any cue whose moment has just arrived, comparing the frame being left
+// against the one being entered. `begun` is true when the animation is starting
+// or looping round, which is what a cue with no mask waits for.
+static void _pet_fire_cues(pet_state_t *s, pet_layer_t *L, const pet_anim_t *a,
+                           const uint8_t *prev, const uint8_t *cur, bool begun) {
+    for (uint8_t i = 0; i < a->cue_count && i < 8; i++) {
+        const pet_cue_t *c = &a->cues[i];
+        bool fire;
+        if (c->mask == 0) {
+            fire = begun;
+        } else if (c->on_clear) {
+            fire = (prev[c->position] & c->mask) && !(cur[c->position] & c->mask);
+        } else {
+            fire = !(prev[c->position] & c->mask) && (cur[c->position] & c->mask);
+        }
+        if (!fire) continue;
+        if (c->once) {
+            // A condition can come true more than once in a pass -- a segment
+            // flickers as something moves through its cell -- and restarting a
+            // long sound partway would cut it off.
+            if (L->cues_fired & (1 << i)) continue;
+            L->cues_fired |= (uint8_t) (1 << i);
+        }
+        if (_pet_cue_audible(s, (pet_sound_id_t) c->sound)) {
+            _pet_play_sound(s, (pet_sound_id_t) c->sound);
+        }
+    }
+}
+
+static const uint8_t _pet_no_segments[10] = { 0 };
+
+// The segments a frame of this animation shows, or nothing if it has no art.
+static const uint8_t *_pet_frame_segs(const pet_anim_t *a, uint8_t frame) {
+    return a->frames ? a->frames[frame].seg : _pet_no_segments;
+}
+
 // Point a layer at an animation, from frame zero.
 static void _pet_layer_play(pet_state_t *s, pet_layer_id_t l, pet_anim_id_t id) {
     pet_layer_t *L = &s->layer[l];
+    const pet_anim_t *a = &_pet_anims[id];
     L->anim = (uint8_t) id;
     L->frame = 0;
-    L->hold_left = _pet_frame_hold(&_pet_anims[id], 0);
+    L->hold_left = _pet_frame_hold(a, 0);
+    L->cues_fired = 0;
+    // Nothing was on screen a moment ago as far as this animation is concerned,
+    // so a condition already true in frame 0 counts as having just come true.
+    _pet_fire_cues(s, L, a, _pet_no_segments, _pet_frame_segs(a, 0), true);
 }
 
 // Play an animation on whichever layer owns it, per the animation table, so
@@ -357,14 +753,15 @@ static bool _pet_start_next_queued(pet_state_t *s) {
     return true;
 }
 
-// The status layer is a direct read of what's on the floor. A barf already
-// playing isn't interrupted — it settles to whatever this wanted afterwards.
+// The status layer is a direct read of what's on the floor: the pile is there
+// or it isn't. The scenes that put it there play on the character layer, so
+// nothing here can interrupt them.
 static void _pet_set_status(pet_state_t *s) {
     pet_anim_id_t want = (s->has_poo && _pet_mood(s) != PET_MOOD_DEAD)
-                       ? PET_ANIM_POO : PET_ANIM_NONE;
+                       ? PET_ANIM_PILE : PET_ANIM_NONE;
     pet_layer_t *L = &s->layer[PET_LAYER_STATUS];
     L->idle = (uint8_t) want;
-    if (L->anim != PET_ANIM_BARF) _pet_layer_play(s, PET_LAYER_STATUS, want);
+    _pet_layer_play(s, PET_LAYER_STATUS, want);
 }
 
 static void _pet_layer_tick(pet_state_t *s, pet_layer_id_t l) {
@@ -387,9 +784,11 @@ static void _pet_layer_tick(pet_state_t *s, pet_layer_id_t l) {
         return;
     }
 
+    uint8_t leaving = L->frame;
     L->frame++;
     if (L->frame < count) {
         L->hold_left = _pet_frame_hold(a, L->frame);
+        _pet_fire_cues(s, L, a, _pet_frame_segs(a, leaving), _pet_frame_segs(a, L->frame), false);
         _pet_draw(s);
         return;
     }
@@ -398,6 +797,12 @@ static void _pet_layer_tick(pet_state_t *s, pet_layer_id_t l) {
     if (loop_here && !queued) {
         L->frame = 0;
         L->hold_left = _pet_frame_hold(a, 0);
+        // A turn of the sleep loop is a breath, whether or not it is voiced.
+        if (L->anim == PET_ANIM_SNORE) {
+            s->breath = (uint8_t) ((s->breath + 1) % PET_SNORE_BREATH_CYCLE);
+        }
+        L->cues_fired = 0;      // a fresh turn of the loop cues afresh
+        _pet_fire_cues(s, L, a, _pet_frame_segs(a, leaving), _pet_frame_segs(a, 0), true);
         _pet_draw(s);
         return;
     }
@@ -571,6 +976,10 @@ static void _pet_catch_up(pet_state_t *s) {
         // wall clock — digestion doesn't stop overnight, only the penalty for
         // leaving the result lying there.
         if (!s->has_poo && s->poo_due_ts != 0 && now >= s->poo_due_ts) {
+            // Only worth animating if it is happening now. Catching up after a
+            // day away lands a poo that arrived hours ago, and playing the pet
+            // squatting over it then would be a small lie; the pile just shows.
+            s->poo_pending = (now - s->poo_due_ts) < PET_POO_FRESH_SECONDS;
             s->has_poo = true;
             s->poo_since_ts = s->poo_due_ts;
             s->poo_residual = 0;
@@ -618,8 +1027,8 @@ static void _pet_disturb(pet_state_t *s) {
 
 static void _pet_fall_asleep(pet_state_t *s) {
     s->scene = PET_SCENE_ASLEEP;
-    // Zero means "snore on the next tick", so every route into sleep matches.
-    s->snore_ticks = 0;
+    // Start on a voiced breath, so every route into sleep sounds the same.
+    s->breath = 0;
     _pet_rest(s);
 }
 
@@ -671,7 +1080,6 @@ static void _pet_feed_tick(pet_state_t *s) {
         s->poo_due_ts = now + PET_POO_DELAY_SECONDS;
     }
     _pet_flash_buff(s, true);
-    _pet_play_sound(s, PET_SOUND_EAT);
     _pet_start_anim(s, PET_ANIM_EAT);
     s->feed_ticks = PET_FEED_PIP_SECONDS * PET_ANIM_HZ;
 }
@@ -686,7 +1094,6 @@ static void _pet_hug(pet_state_t *s) {
     // Past the cap the pet is still kissed, it just doesn't help: a button that
     // silently does nothing reads as broken, and the absent plus sign is the
     // tell that the cap is spent.
-    _pet_play_sound(s, PET_SOUND_KISS);
     _pet_start_anim(s, PET_ANIM_KISS);
 }
 
@@ -698,6 +1105,7 @@ static void _pet_sweep(pet_state_t *s) {
     s->has_poo = false;
     s->poo_due_ts = 0;
     s->poo_residual = 0;
+    s->poo_pending = false;
     _pet_set_status(s);
     // No sweep animation in the checklist, so the acknowledgement is the mood
     // restarting from frame 0. Not while asleep: that would cut off the snore.
@@ -719,6 +1127,7 @@ static void _pet_resurrect(pet_state_t *s) {
     s->has_poo = false;
     s->poo_due_ts = 0;
     s->poo_residual = 0;
+    s->poo_pending = false;
     // Hugs and the play cooldown reset too: coming back on the same
     // day-of-month you last hugged would otherwise find the cap already spent.
     s->hugs_today = 0;
@@ -763,7 +1172,6 @@ static void _pet_play_tick(pet_state_t *s) {
         // cooldown stays spent, since a pet just made sick won't go again.
         _pet_add_qt(s, (s->play_buffed ? PET_BUFF_PLAY : 0) + PET_DEBUFF_BARF);
         _pet_flash_buff(s, false);
-        _pet_play_sound(s, PET_SOUND_BARF);
         _pet_start_anim(s, PET_ANIM_BARF);
     } else if (s->nausea > 0) {
         // Nothing in the spec says what triggers PLAY_BIG, so it's a session
@@ -827,7 +1235,7 @@ static void _pet_enter(pet_state_t *s) {
             break;
         case PET_DAYPART_NIGHT:
             s->scene = PET_SCENE_ASLEEP;
-            s->snore_ticks = 0;     // snore on the next tick
+            s->breath = 0;          // start on a voiced breath
             break;
     }
     if (!_pet_start_next_queued(s)) _pet_rest(s);
@@ -860,19 +1268,24 @@ static void _pet_tick(pet_state_t *s, uint8_t subsecond) {
             if (s->night_awake_ticks > 0 && --s->night_awake_ticks == 0) _pet_fall_asleep(s);
             break;
         case PET_SCENE_ASLEEP:
-            // Snore on a timer rather than once on nodding off, so the pet is
-            // audibly asleep the whole time you're looking at it.
-            if (s->snore_ticks == 0) {
-                _pet_play_sound(s, PET_SOUND_SNORE);
-                s->snore_ticks = PET_SNORE_PERIOD_SECONDS * PET_ANIM_HZ;
-            } else {
-                s->snore_ticks--;
-            }
+            // Nothing to do: the sleep animation loops, and its cues voice two
+            // breaths in every three. See _pet_cue_audible.
             break;
         default:
             break;
     }
     if (subsecond == 0) _pet_check_daypart(s);
+    // A poo that has just landed gets its scene, once the pet is free to play
+    // it: never mid-interaction, and never at night, where it would talk over
+    // the snore. Either way the pile is already on the status layer.
+    if (s->poo_pending) {
+        if (s->scene == PET_SCENE_IDLE && !_pet_anim_busy(s)) {
+            s->poo_pending = false;
+            _pet_start_anim(s, PET_ANIM_POO);
+        } else if (s->scene == PET_SCENE_ASLEEP || s->scene == PET_SCENE_DEAD) {
+            s->poo_pending = false;
+        }
+    }
     _pet_flash_tick(s);
     _pet_anim_tick(s);
 }

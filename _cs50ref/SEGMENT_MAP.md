@@ -108,15 +108,25 @@ inside its own cells.
 
 | Region | Cells |
 | --- | --- |
-| Character | 1, 4, 5, 6, 7, 8, colon, and 9's `A D E F` |
-| Poo / barf | 9's `G B C` — poo is `G\|B\|C`, barf the puddle `B\|C` |
+| Character | 1, 4, 5, 6, 7, 8, 9, colon |
+| Pile | 9's `G B C` — what the poo leaves behind, until it is swept |
 | Food pips | 3, filling `B`, `C`, `F`, `E` in that order |
 | Buff / debuff | 0 — plus is `G\|H`, minus is `H` |
 | Sound | SIGNAL, flashed whenever a sound plays |
 | unused | 2, PM, 24H, LAP |
 
-Position 9 is deliberately shared. That is only safe because it has no tied
-segments; the same split in 4 or 6 would break, since `A` is tied to `D` in both.
+Position 9 is shared rather than split. The pile only ever wants its centre and
+bottom edge, but the character reaches across all of it: worn sideways the main
+line runs top to bottom with 9 at the far end, and the resurrect animation rises
+the spirit up from there through the whole line. Clipping that would cut the
+entrance in half. Sharing costs nothing because compositing is a
+straight `OR` — neither region can erase the other — and the two are never both
+drawing there anyway, since the pet only resurrects with the floor clean.
+
+Poo and barf are drawn as whole scenes, the pet and the floor together, so they
+play as character animations like any other; only the pile that outlives them
+belongs to the status region.
+
 Position 1 sits off the mouth for snores and kisses, and is the one character
 cell with ties — `B`+`C` and `E`+`F` are whole edges once rotated.
 
