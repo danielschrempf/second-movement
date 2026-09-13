@@ -30,3 +30,4 @@ fp-info-cache
 
 # scratch dirs from _cs50ref/tools/decode.sh
 _cs50ref/tools/tmp.*
+__pycache__/
