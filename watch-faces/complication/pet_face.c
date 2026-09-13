@@ -773,10 +773,10 @@ static void _pet_layer_tick(pet_state_t *s, pet_layer_id_t l) {
     bool loop_here = a->loop;
     bool queued = (l == PET_LAYER_CHARACTER) && (s->queue_len > 0);
 
-#if PET_DEBUG_CONTROLS
-    // Hold whatever is being previewed on screen, one-shots included, so it can
-    // be looked at for as long as it takes rather than flashing past once.
-    if (s->debug_preview) { loop_here = true; queued = false; }
+#if PET_SHOWCASE
+    // Hold whatever the showcase is on, one-shots included, so it can be looked
+    // at for as long as it takes rather than flashing past once.
+    if (s->showcase_on) { loop_here = true; queued = false; }
 #endif
 
     if (L->hold_left > 1) {
@@ -867,26 +867,27 @@ static void _pet_rest(pet_state_t *s) {
     _pet_start_anim(s, _pet_mood_anim(mood));
 }
 
-#if PET_DEBUG_CONTROLS
-// -- Development controls -----------------------------------------------------
+#if PET_SHOWCASE
+// -- Showcase -----------------------------------------------------------------
 //
 // Most animations only appear when the clock says so — Angry wants most of a
 // day of neglect, dead a day and a half, snoring wants it to be 21:00. These
-// walk the list on demand. Button map is next to PET_DEBUG_CONTROLS.
+// walk the list on demand, which is half the fun of the thing. Button map is
+// next to PET_SHOWCASE.
 
 // Step to the next animation and hold it. Walking off the end of the list hands
 // the screen back to the live pet, so repeated presses cycle through everything
-// and return, rather than sticking in preview with no way out.
-static void _pet_debug_next_anim(pet_state_t *s) {
-    pet_anim_id_t next = s->debug_preview ? (pet_anim_id_t) (s->preview_anim + 1)
+// and return, rather than stranding the screen in the showcase.
+static void _pet_showcase_next(pet_state_t *s) {
+    pet_anim_id_t next = s->showcase_on ? (pet_anim_id_t) (s->showcase_anim + 1)
                                           : PET_ANIM_HAPPY;
     if (next >= PET_ANIM_COUNT) {
-        s->debug_preview = false;
+        s->showcase_on = false;
         _pet_rest(s);
         return;
     }
-    s->debug_preview = true;
-    s->preview_anim = (uint8_t) next;
+    s->showcase_on = true;
+    s->showcase_anim = (uint8_t) next;
     s->queue_len = 0;
     // Clear both layers first: stepping onto a status animation shouldn't leave
     // the character standing there, or vice versa.
@@ -898,9 +899,9 @@ static void _pet_debug_next_anim(pet_state_t *s) {
 // Push the mood up a tic at a time, wrapping past dead back to blissful, so
 // every threshold can be seen in order without waiting a day for each one.
 // _pet_rest sorts out the scene, including climbing back out of PET_SCENE_DEAD.
-static void _pet_debug_step_mood(pet_state_t *s) {
+static void _pet_showcase_step_mood(pet_state_t *s) {
     uint8_t next = s->quarter_tics + PET_TIC(1);
-    s->debug_preview = false;
+    s->showcase_on = false;
     s->quarter_tics = (next > PET_QT_DEAD) ? 0 : next;
     s->awake_residual = 0;
     _pet_rest(s);
@@ -1200,8 +1201,8 @@ static void _pet_enter(pet_state_t *s) {
     s->buff_ticks = s->debuff_ticks = s->bell_ticks = s->signal_ticks = 0;
     _pet_layer_play(s, PET_LAYER_CHARACTER, PET_ANIM_NONE);
     _pet_layer_play(s, PET_LAYER_STATUS, PET_ANIM_NONE);
-#if PET_DEBUG_CONTROLS
-    s->debug_preview = false;
+#if PET_SHOWCASE
+    s->showcase_on = false;
 #endif
     // Whatever is on the floor shows from the first frame, rather than waiting
     // for the wake/mood queue to drain and _pet_rest to get around to it.
@@ -1322,9 +1323,9 @@ void pet_face_activate(void *context) {
 bool pet_face_loop(movement_event_t event, void *context) {
     pet_state_t *s = (pet_state_t *) context;
 
-#if PET_DEBUG_CONTROLS
-    // Any real interaction drops out of preview, so there's nothing to remember
-    // about escaping it.
+#if PET_SHOWCASE
+    // Any real interaction drops out of the showcase, so there's nothing to
+    // remember about escaping it.
     switch (event.event_type) {
         case EVENT_LIGHT_BUTTON_UP:
         case EVENT_LIGHT_LONG_PRESS:
@@ -1332,7 +1333,7 @@ bool pet_face_loop(movement_event_t event, void *context) {
         case EVENT_ALARM_LONG_PRESS:
         case EVENT_SINGLE_TAP:
         case EVENT_DOUBLE_TAP:
-            s->debug_preview = false;
+            s->showcase_on = false;
             break;
         default:
             break;
@@ -1353,8 +1354,8 @@ bool pet_face_loop(movement_event_t event, void *context) {
         case EVENT_LIGHT_LONG_UP:
             break;
         case EVENT_LIGHT_REALLY_LONG_PRESS:
-#if PET_DEBUG_CONTROLS
-            _pet_debug_next_anim(s);
+#if PET_SHOWCASE
+            _pet_showcase_next(s);
 #endif
             break;
         case EVENT_LIGHT_BUTTON_UP:
@@ -1382,8 +1383,8 @@ bool pet_face_loop(movement_event_t event, void *context) {
         case EVENT_ALARM_LONG_UP:
             break;
         case EVENT_ALARM_REALLY_LONG_PRESS:
-#if PET_DEBUG_CONTROLS
-            _pet_debug_step_mood(s);
+#if PET_SHOWCASE
+            _pet_showcase_step_mood(s);
 #endif
             break;
 

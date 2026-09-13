@@ -46,6 +46,12 @@
  *   Alarm  long   Resurrect (only while dead)
  *   Shake         Play (accelerometer; simulator: Alarm long while alive)
  *   Mode          reserved by Movement — next face
+ *   Light  1.5 s  Showcase: hold the next animation on screen (PET_SHOWCASE)
+ *   Alarm  1.5 s  Showcase: push the mood up one tic
+ *
+ * The showcase holds fire their 0.5 s action on the way past, so stepping an
+ * animation also hugs the pet. Left in: it is a fair trade, and the short
+ * actions never fire, since BUTTON_UP only arrives on a sub-0.5 s release.
  *
  * The pet sleeps 21:00–05:00. Nothing decays while it does; disturbing it
  * costs tics and earns no buff. While you're on another face nothing runs;
@@ -146,15 +152,19 @@
 #define PET_BUFF_POSITION           0   // plus / minus sign
 #define PET_FOOD_POSITION           3   // the four pips
 
-// Development controls, so art can be reviewed without waiting on the clock.
+// Showcase: walk the animations and moods without waiting on the clock. Most of
+// them are gated behind it — angry wants most of a day of neglect, dead a day
+// and a half — so this is how anyone sees the art, and it is as much of the
+// appeal as the game.
 //
 //   LIGHT held 1.5 s   hold the next animation on screen; walks the whole list
 //                      and then hands the screen back to the live pet
 //   ALARM held 1.5 s   push the mood up one tic, wrapping past dead to blissful
 //
-// Both also fire their normal 0.5 s long-press on the way past, since Movement
-// delivers that first. Harmless while previewing.
-#define PET_DEBUG_CONTROLS          1
+// Both fire their 0.5 s long-press on the way past, since Movement delivers that
+// first: LIGHT spends a hug, ALARM does nothing unless the pet is dead, in which
+// case it resurrects. Set to 0 for a build where the buttons only play the game.
+#define PET_SHOWCASE          1
 
 // ---- Frames -----------------------------------------------------------------
 
@@ -416,8 +426,8 @@ typedef struct {
     uint16_t night_awake_ticks;
     uint8_t  breath;            // which breath of the snore cycle we are on
     bool     tap_enabled;
-    bool     debug_preview;     // PET_DEBUG_CONTROLS: an animation is held on screen
-    uint8_t  preview_anim;      // ... and which one, so stepping walks the list
+    bool     showcase_on;       // PET_SHOWCASE: an animation is held on screen
+    uint8_t  showcase_anim;     // ... and which one, so stepping walks the list
 } pet_state_t;
 
 void pet_face_setup(uint8_t watch_face_index, void ** context_ptr);

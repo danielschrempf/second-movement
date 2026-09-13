@@ -578,7 +578,7 @@ That is a miserable loop to be in fourteen times over.
 
 Two events were sitting unused as empty `break`s — `EVENT_LIGHT_REALLY_LONG_PRESS`
 and `EVENT_ALARM_REALLY_LONG_PRESS`, both fired at 1.5 s, well clear of the 0.5 s
-long-press the real controls use. So, behind a new `PET_DEBUG_CONTROLS` flag:
+long-press the real controls use. So, behind a new `PET_SHOWCASE` flag:
 
 - **LIGHT held 1.5 s** steps to the next animation and *holds* it, one-shots
   included — `_pet_anim_tick` loops whatever is being previewed instead of
@@ -595,7 +595,7 @@ escaping it. Both controls fire their normal long-press action on the way past �
 Movement delivers the 0.5 s event before the 1.5 s one, so stepping animations
 also hugs the pet. Harmless while previewing, and noted next to the flag.
 
-Verified the flag actually gates it: with `PET_DEBUG_CONTROLS` and
+Verified the flag actually gates it: with `PET_SHOWCASE` and
 `PET_DEBUG_HUD` both at 0 the firmware builds clean with no unused-function
 warnings and comes out 200 bytes smaller. A debug tool that breaks the release
 build is worse than no debug tool.
@@ -718,7 +718,7 @@ rogue frame with every bit set gets clipped out of its neighbours' cells. All
 pass.
 
 Hardware and simulator both build clean. 132,752 text + 2,044 data = 134,796,
-55% of budget. With `PET_DEBUG_CONTROLS` at 0: no unused-function warnings,
+55% of budget. With `PET_SHOWCASE` at 0: no unused-function warnings,
 160 bytes smaller.
 
 Next: the sketches. Nothing else is in the way.
@@ -783,7 +783,7 @@ owns, since that is the document open while drawing. CLAUDE.md now also points
 at the GIF decode pipeline, which is otherwise only findable by reading back
 through Session 6.
 
-Both targets build clean, `PET_DEBUG_CONTROLS` at 0 included.
+Both targets build clean, `PET_SHOWCASE` at 0 included.
 
 ### The tooling was living in a temp directory
 
@@ -996,3 +996,43 @@ Nothing. The face is feature-complete against the spec.
 
 Flash is 135,112 + 2,124 = 137,236 (56%), up 2,440 bytes over the pre-art
 baseline for fourteen animations, ten sounds and the cue engine.
+
+---
+
+## Session 9 — the showcase is a feature, not a debug flag
+
+`PET_DEBUG_CONTROLS` is now `PET_SHOWCASE`, along with `_pet_showcase_next`,
+`_pet_showcase_step_mood`, `showcase_on` and `showcase_anim`. A rename, so the
+firmware is byte-identical — but the old name described what it was built for
+rather than what it is. Most of the animations are gated behind the clock, so
+walking them on demand is how anyone actually sees the art, and Dan's read is
+that the showcase is as much of the appeal as the game. It is documented as a
+feature in MANUAL.md §10 and in the header's control list, with the flag kept
+for a build where the buttons only play the game.
+
+**A correction that matters.** The manual claimed the 1.5 s holds "feed or sweep
+the pet on the way past". They do not: `EVENT_*_BUTTON_UP` only arrives on a
+release under half a second, so the short actions never fire on a hold. What
+does fire is the 0.5 s long-press:
+
+- `LIGHT` hugs — one of the four daily hugs and −0.25 tic per animation stepped.
+  Walking all fourteen exhausts the cap by the fourth press.
+- `ALARM` does nothing on hardware while the pet is alive, and resurrects it if
+  it is dead — so the mood step cannot walk past death without reviving first.
+  In the simulator it plays instead, standing in for the accelerometer.
+
+Session 6's entry had this right at the time ("stepping an animation also hugs
+the pet"); the manual lost it. Worth noting as the failure mode: a fact recorded
+once in a process log does not survive into a document written later from memory.
+
+**No new gesture, checked rather than assumed.** The options were `MODE`
+really-long-press, a double-tap, or a button chord. `MODE_LONG_PRESS` is handled
+by `movement_default_loop_handler` at 0.5 s and jumps to face 0, so reaching
+1.5 s means swallowing the system-wide "hold Mode to go home" that every other
+face honours. `SINGLE_TAP` and `DOUBLE_TAP` are both marked "not yet
+implemented" in `movement.h`, and a tap would fight shake-to-play regardless.
+Movement exposes no chords. The existing gesture stays.
+
+**The hug stays too, un-refunded.** Undoing it when the 1.5 s press arrives was
+three lines and tempting, but the trade reads better as it is: a pet you stop to
+admire gets a cuddle out of it.

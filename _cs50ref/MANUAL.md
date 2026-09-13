@@ -53,7 +53,7 @@ there. See §14.
 
 ## 2. Controls
 
-Long press is 0.5 s; the preview controls in §10 are 1.5 s.
+Long press is 0.5 s; the showcase holds in §10 are 1.5 s.
 
 | Press | Does | Notes |
 | --- | --- | --- |
@@ -63,6 +63,7 @@ Long press is 0.5 s; the preview controls in §10 are 1.5 s.
 | `ALARM` hold | Resurrect | Only while dead |
 | Shake | Play | Accelerometer tap detection, 5 s window |
 | `MODE` | Leave | Movement's default — next face |
+| `LIGHT`/`ALARM` hold 1.5 s | Showcase | Walk the animations, or step the mood. `LIGHT` spends a hug getting there — see §10 |
 
 In the simulator, which has no accelerometer, `ALARM` hold stands in for a shake
 while the pet is alive.
@@ -215,19 +216,40 @@ edge — rather than timed against them. See §14.
 
 ---
 
-## 10. Preview controls
+## 10. Showcase
 
-Most animations need the clock to cooperate: angry takes most of a day of
-neglect, dead a day and a half, snoring waits for 21:00.
+Most of the pet's animations are gated behind the clock: angry takes most of a
+day of neglect, dead a day and a half, snoring waits for 21:00. Two controls walk
+the whole set on demand.
 
 | Press | Does |
 | --- | --- |
-| `LIGHT` hold 1.5 s | Hold the next animation on screen. Repeat to walk the whole list and hand the screen back to the live pet |
+| `LIGHT` hold 1.5 s | Hold the next animation on screen. Repeat to walk all fourteen and hand the screen back to the live pet |
 | `ALARM` hold 1.5 s | Push the mood up one tic, wrapping past dead back to blissful |
 
-Both fire their normal 0.5 s action on the way past, since Movement delivers that
-first — you will feed or sweep the pet reaching for them. Set
-`PET_DEBUG_CONTROLS` to `0` in `pet_face.h` to compile them out.
+Held animations stay put rather than flashing past once, so one-shots can be
+looked at for as long as you like. Stepping the mood is the fast way to see all
+five expressions in order, death and resurrection included.
+
+Both fire their 0.5 s long-press on the way past, since Movement delivers that
+first. The short actions do **not** fire — `EVENT_*_BUTTON_UP` only arrives on a
+release under half a second — so nothing is fed and nothing is swept. What does
+happen:
+
+- **`LIGHT` spends a hug.** Each animation you step through costs one of the four
+  daily hugs and −0.25 tic. Walking all fourteen exhausts the cap four presses
+  in; the rest are no-ops, so the pet ends up a tic healthier and out of hugs.
+- **`ALARM` does nothing** on hardware while the pet is alive. If it is dead, the
+  0.5 s press resurrects it before you reach the mood step. In the simulator,
+  which stands in for the accelerometer here, it plays with the pet instead.
+
+The hug is left in deliberately rather than refunded on escalation. It is a
+fair trade — a pet you stop to admire gets a cuddle out of it — and the only
+consequence is that a showcase session spends that day's hugs on a pet you are
+also raising.
+
+Set `PET_SHOWCASE` to `0` in `pet_face.h` for a build where the buttons only play
+the game.
 
 ---
 
