@@ -1155,3 +1155,69 @@ animation that had no way to play. A test suite that only checks internal
 consistency cannot tell you the pet is unreachable; wearing it can.
 
 Flash is 135,248 + 2,124 = 137,372 (56%), up 136 bytes.
+
+---
+
+## Session 11 — two controls that did nothing
+
+More wrist time, two more reports. Both turned out to be the same shape as
+session 10's: code that did exactly what it said, where what it said was wrong.
+
+### The pet ignored a silent watch
+
+Sounds went out at `BUZZER_PRIORITY_SIGNAL`, which maps to
+`movement_signal_volume()`. That setting is soft-or-loud with **no off** — and
+neither is the alarm volume. The only mute Movement gives the wearer is
+`BTN beep -> N` (`movement_button_should_sound()`), which governs button sounds
+and nothing else. So a pet at signal priority could not be silenced by anything
+reachable from the settings face, on a watch whose whole appeal is being
+unobtrusive.
+
+Now gated on `movement_button_should_sound()` and played at
+`BUZZER_PRIORITY_BUTTON`. That is the right home on the merits, not just the
+convenient one: these sounds answer what the wearer just did, rather than being
+a scheduled chime, and at the lowest priority an actual alarm is never talked
+over by the pet chewing. `SIGNAL` still flashes when muted, which is what that
+indicator was put in for.
+
+### The animation showcase looked completely dead
+
+Holding `LIGHT` hugged the pet and then, apparently, nothing. The cause is an
+interaction between two things that were each reasonable alone.
+
+Movement delivers `EVENT_LIGHT_LONG_PRESS` at 0.5 s on the way to
+`EVENT_LIGHT_REALLY_LONG_PRESS` at 1.5 s. The escape hatch at the top of
+`pet_face_loop` treated the long press as a real interaction and cleared
+`showcase_on` — correctly, since the hug needs the screen back to show its kiss.
+But `_pet_showcase_next` read its cursor off that same flag:
+
+```c
+pet_anim_id_t next = s->showcase_on ? s->showcase_anim + 1 : PET_ANIM_HAPPY;
+```
+
+By the time the 1.5 s press arrived, `showcase_on` was always false. So every
+hold stepped to `PET_ANIM_HAPPY` — and since the pet was usually happy already,
+every hold appeared to do nothing but hug. The walk could never reach its second
+entry, let alone its sixteenth.
+
+Split in two: `showcase_anim` is the cursor and survives the long press,
+`showcase_on` only means "an animation is held right now". A short press, a
+sweep or a shake clears both, so leaving the showcase deliberately and coming
+back starts the walk over; a hug in passing does not.
+
+Dan offered to move the showcase to the `ALARM` hold instead, since `ALARM`'s
+long press does nothing while the pet is alive. Not needed — the button was
+never the problem, and he likes that stepping an animation hugs the pet. Kept on
+`LIGHT`.
+
+### Worth noting about the diagnosis
+
+Nothing here was found by running anything. Both were found by reading
+`movement.c`: the volume table in `_movement_get_buzzer_volume`, and the order
+`_process_button_longpress_timeout` emits events in. `EVENT_LIGHT_REALLY_LONG_PRESS`
+has exactly one other user in the whole tree (`hydration_face`, on `ALARM`), so
+there was no prior art to copy the pattern from — and the failure was silent in
+the most literal way, since stepping to the animation already on screen is
+indistinguishable from the button not working.
+
+Flash is 135,272 + 2,124 = 137,396 (56%), up 24 bytes.

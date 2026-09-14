@@ -493,8 +493,20 @@ static int8_t *_pet_sounds[PET_SOUND_COUNT] = {
 // The one funnel every sound passes through, so SIGNAL is flashed here too —
 // the watch is often kept silent, and the pet would otherwise lose half its
 // personality.
+//
+// The pet answers to the watch's own **BTN beep** setting: `N` in the settings
+// face and it is silent, `L` or `H` and it plays at that volume. Movement has no
+// global mute — signal and alarm only offer soft and loud — so a pet playing at
+// BUZZER_PRIORITY_SIGNAL could not be shut up by anything the wearer could
+// reach. Button priority is the right home for it anyway: these are responses to
+// what you just did, not scheduled chimes, and at the lowest priority an alarm
+// going off is never talked over by the pet chewing.
+//
+// The SIGNAL indicator still flashes when muted, which is what it was for.
 static void _pet_play_sound(pet_state_t *s, pet_sound_id_t id) {
-    movement_play_sequence(_pet_sounds[id], BUZZER_PRIORITY_SIGNAL);
+    if (movement_button_should_sound()) {
+        movement_play_sequence(_pet_sounds[id], BUZZER_PRIORITY_BUTTON);
+    }
     s->signal_ticks = PET_FLASH_TICKS;
 }
 
@@ -894,11 +906,19 @@ static void _pet_rest(pet_state_t *s) {
 // Step to the next animation and hold it. Walking off the end of the list hands
 // the screen back to the live pet, so repeated presses cycle through everything
 // and return, rather than stranding the screen in the showcase.
+//
+// Where the walk has got to lives in showcase_anim, and deliberately not in
+// showcase_on. Movement delivers the 0.5 s long press on the way to the 1.5 s
+// one, and that hug has to have the screen back to show its kiss — so by the
+// time this runs, showcase_on is always false. Reading the cursor off it meant
+// every hold restarted at HAPPY, and since the pet is usually happy already,
+// holding LIGHT looked exactly like doing nothing at all.
 static void _pet_showcase_next(pet_state_t *s) {
-    pet_anim_id_t next = s->showcase_on ? (pet_anim_id_t) (s->showcase_anim + 1)
+    pet_anim_id_t next = s->showcase_anim ? (pet_anim_id_t) (s->showcase_anim + 1)
                                           : PET_ANIM_HAPPY;
     if (next >= PET_ANIM_COUNT) {
         s->showcase_on = false;
+        s->showcase_anim = PET_ANIM_NONE;   // the next hold starts the walk over
         _pet_rest(s);
         return;
     }
@@ -1265,6 +1285,7 @@ static void _pet_enter(pet_state_t *s) {
     _pet_layer_play(s, PET_LAYER_STATUS, PET_ANIM_NONE);
 #if PET_SHOWCASE
     s->showcase_on = false;
+    s->showcase_anim = PET_ANIM_NONE;   // a fresh visit starts the walk over
 #endif
     // Whatever is on the floor shows from the first frame, rather than waiting
     // for the wake/mood queue to drain and _pet_rest to get around to it.
@@ -1409,12 +1430,21 @@ bool pet_face_loop(movement_event_t event, void *context) {
     // Any real interaction drops out of the showcase, so there's nothing to
     // remember about escaping it.
     switch (event.event_type) {
+        // Feeding, sweeping or a shake: the wearer wants the pet back. Forget
+        // where the walk had got to as well, so the next hold starts over.
         case EVENT_LIGHT_BUTTON_UP:
-        case EVENT_LIGHT_LONG_PRESS:
         case EVENT_ALARM_BUTTON_UP:
-        case EVENT_ALARM_LONG_PRESS:
         case EVENT_SINGLE_TAP:
         case EVENT_DOUBLE_TAP:
+            s->showcase_on = false;
+            s->showcase_anim = PET_ANIM_NONE;
+            break;
+        // The 0.5 s press arrives on the way to every 1.5 s hold, so it cannot
+        // be read as a decision to leave. It hands the screen back — the hug's
+        // kiss needs it — but keeps the cursor, so the hold a second later
+        // carries on down the list instead of restarting it.
+        case EVENT_LIGHT_LONG_PRESS:
+        case EVENT_ALARM_LONG_PRESS:
             s->showcase_on = false;
             break;
         default:

@@ -68,6 +68,9 @@ Long press is 0.5 s; the showcase holds in §10 are 1.5 s.
 In the simulator, which has no accelerometer, `ALARM` hold stands in for a shake
 while the pet is alive.
 
+**To silence the pet**, set `BTN beep` to `N` in the settings face — the pet
+follows that setting like any button sound. See §9.
+
 **Nothing runs in the background.** The face only ticks while it is on screen;
 `pet_face_resign` drops the tick rate back to 1 Hz and disables tap detection.
 Decay still accrues — `_pet_catch_up` reconstructs it from timestamps on the next
@@ -263,6 +266,20 @@ monophonic square wave, so pitch and rhythm are the only tools.
 Sounds are attached to animations as **cues** — a cell, a segment mask and an
 edge — rather than timed against them. See §14.
 
+### Silencing it
+
+The pet follows the watch's own **`BTN beep`** setting, in the settings face: set
+it to `N` and the pet is silent, `L` or `H` and it plays at that volume. The
+`SIGNAL` indicator still flashes on every sound either way, so a muted pet reads
+exactly the same.
+
+That is the only mute Movement offers — `SIGNAL` and `ALARM` are soft-or-loud
+with no off — and the pet's sounds belong under it: they answer what you just
+did, rather than being a scheduled chime. They play at `BUZZER_PRIORITY_BUTTON`
+for the same reason, which also means a real alarm is never talked over by the
+pet chewing. An earlier build used `BUZZER_PRIORITY_SIGNAL`, and nothing the
+wearer could reach would shut it up.
+
 ---
 
 ## 10. Showcase
@@ -279,6 +296,15 @@ the whole set on demand.
 Held animations stay put rather than flashing past once, so one-shots can be
 looked at for as long as you like. Stepping the mood is the fast way to see all
 five expressions in order, death and resurrection included.
+
+Where the walk has got to is kept in `showcase_anim`, separately from "an
+animation is currently held" (`showcase_on`). It has to be: the 0.5 s long press
+arrives on the way to every 1.5 s hold, and it hands the screen back so the hug
+can show its kiss — so by the time the hold lands, nothing is held. An earlier
+build read the cursor off `showcase_on`, which meant every hold restarted at
+`HAPPY`; with the pet usually happy already, the control looked completely dead.
+A short press, a sweep or a shake clears the cursor as well, so leaving the
+showcase properly and coming back starts the walk over.
 
 Both fire their 0.5 s long-press on the way past, since Movement delivers that
 first. The short actions do **not** fire — `EVENT_*_BUTTON_UP` only arrives on a
@@ -485,5 +511,6 @@ that mean opening the watch or rewriting it.
 | Mess appears | 12 h after a meal |
 | Fatal at | 6 tics |
 | Animations | 14, decoded from GIF exports |
-| Sounds | 10, cued to frames |
-| Flash | 135,248 text + 2,124 data = 137,372 (56% of 245,760) |
+| Sounds | 10, cued to frames, at `BUZZER_PRIORITY_BUTTON` |
+| Muting | Follows the watch's `BTN beep` setting (`N` = silent) |
+| Flash | 135,272 text + 2,124 data = 137,396 (56% of 245,760) |

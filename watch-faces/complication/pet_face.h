@@ -64,6 +64,10 @@
  * The art and the sounds are all in. Several sounds are cued to specific frames
  * of their animation -- _cs50ref/tools/check_sounds.py asserts they still line
  * up, and wants running after any redraw.
+ *
+ * The pet answers to the watch's own BTN beep setting: N in the settings face
+ * and it is silent. That is the only mute Movement has, so its sounds play at
+ * BUZZER_PRIORITY_BUTTON rather than SIGNAL -- see _pet_play_sound.
  */
 
 // ---- Tunables ---------------------------------------------------------------
