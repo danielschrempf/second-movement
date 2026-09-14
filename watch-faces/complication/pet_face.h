@@ -42,9 +42,10 @@
  * Controls
  *   Light  short  Feed (queues up to 4 pips; eats after a 3 s pause)
  *   Light  long   Hug
- *   Alarm  short  Sweep poo
+ *   Alarm  short  Sweep the floor (a pile or a barf puddle; not a poo on its way)
  *   Alarm  long   Resurrect (only while dead)
  *   Shake         Play (accelerometer; simulator: Alarm long while alive)
+ *                 Each shake climbs a rung; the pet is deaf between them
  *   Mode          reserved by Movement — next face
  *   Light  1.5 s  Showcase: hold the next animation on screen (PET_SHOWCASE)
  *   Alarm  1.5 s  Showcase: push the mood up one tic
@@ -101,18 +102,40 @@
 #define PET_POO_DELAY_SECONDS       (2 * PET_SECONDS_PER_TIC)
 // An unswept poo accrues at the same rate as passive decay, so it doubles it.
 #define PET_POO_SECONDS_PER_QT      (PET_SECONDS_PER_QT)
-// How recently a poo must have landed for the scene to be worth playing. Past
-// this it is history, and only the pile shows.
-#define PET_POO_FRESH_SECONDS       60
+// The poo scene plays the first time the owner is on the face to see it,
+// however long ago the drop came due. An earlier build only played it if the
+// drop was under a minute old, which was honest about the clock and meant
+// nobody ever saw it: a twelve-hour countdown expires while the face is in the
+// background, and a visit almost never lands in the minute it happens.
+//
+// A barf leaves a puddle behind the same way, minus the countdown: the scene
+// has already been watched, so there is nothing left to replay.
 
 // Feeding
 #define PET_FOOD_MAX                4
 #define PET_FEED_SETTLE_SECONDS     3   // pause after the last press before eating starts
 #define PET_FEED_PIP_SECONDS        1   // between pips
 
-// Play
-#define PET_PLAY_WINDOW_SECONDS     5
-#define PET_NAUSEA_LIMIT            3   // more motion than this inside the window -> barf
+// Play: a ladder of three rungs, paced by the clock rather than by how many
+// taps a shake happens to produce.
+//
+// Counting taps inside one window measured how hard the watch was shaken rather
+// than how long it was played with. A flick of the wrist is a burst of
+// interrupts, so a single shake either registered once — PLAY_SMALL, every time
+// — or tripped clean past the nausea limit into a barf, with almost nothing in
+// between. Now each shake moves the pet up one rung and then the pet is deaf
+// for a while, so one shake can only ever count once:
+//
+//   shake                  -> PLAY_SMALL, then deaf, then a window to shake again
+//   shake in that window   -> PLAY_BIG, deaf and a window again
+//   shake in that window   -> barf
+//   window expires         -> the session ends where it stands
+//
+// The deaf period starts when the animation ends rather than when the shake
+// landed, so a flourish never eats into the window the owner is being offered.
+#define PET_PLAY_DEAF_SECONDS       5   // motion ignored while the pet settles
+#define PET_PLAY_WINDOW_SECONDS     5   // ... and then this long to shake again
+#define PET_PLAY_STAGE_BARF         3   // the rung that makes the pet sick
 // Shaking always plays with the pet, but the buff only lands once per cooldown.
 // Hugs are capped and feeding is limited by poo; without this, play was the one
 // uncapped source of relief and a shake every 5 s healed the pet in a minute.
@@ -335,10 +358,12 @@ typedef enum {
     PET_ANIM_KISS,
     PET_ANIM_SNORE,
     PET_ANIM_WAKE,
-    // the status layer's only animation: the pile left behind, which stays put
-    // until it is swept. POO and BARF above are the scenes that produce it, and
-    // they play on the character layer like any other one-shot.
+    // the status layer: what the scenes above leave on the floor, which stays
+    // put until it is swept. POO and BARF play on the character layer like any
+    // other one-shot; these are what is still there afterwards. The pile has a
+    // stem, the puddle doesn't — matching the last frame of each scene.
     PET_ANIM_PILE,
+    PET_ANIM_PUDDLE,
     PET_ANIM_COUNT
 } pet_anim_id_t;
 
@@ -382,7 +407,7 @@ typedef enum {
     PET_SCENE_ASLEEP,       // night, snoring
     PET_SCENE_NIGHT_AWAKE,  // night, disturbed: interactions cost tics and give nothing
     PET_SCENE_FEEDING,      // pips queued or being eaten
-    PET_SCENE_PLAYING,      // inside the 5 s shake window
+    PET_SCENE_PLAYING,      // mid play session: settling, or waiting to be shaken again
     PET_SCENE_DEAD
 } pet_scene_t;
 
@@ -394,6 +419,10 @@ typedef struct {
     //    crash hatches a new pet. See _pet_load for why that's deliberate.
     uint8_t  quarter_tics;
     bool     has_poo;
+    // A barf leaves a puddle to sweep too. It is kept apart from has_poo
+    // because the two are drawn differently and only the poo goes on charging
+    // tics — the barf has already taken its own out of the pet.
+    bool     has_barf;
     uint32_t last_update_ts;    // decay applied up to here (UTC)
     uint32_t last_fed_ts;       // for the missed-day penalty
     uint32_t poo_due_ts;        // a poo is on its way; 0 = none pending
@@ -419,10 +448,10 @@ typedef struct {
     uint8_t  signal_ticks;      // stands in for a sound on a silent watch
     uint8_t  food_queue;
     uint16_t feed_ticks;
-    uint16_t play_ticks;
-    uint8_t  nausea;
+    uint16_t play_ticks;        // deaf period plus window, counted down together
+    uint8_t  play_stage;        // rung of the play ladder: 0 idle, 1 small, 2 big
     bool     play_buffed;       // did this play session actually earn the buff?
-    bool     poo_pending;       // a poo just landed; play the scene when idle
+    bool     poo_pending;       // a poo has landed unwatched; play the scene when idle
     uint16_t night_awake_ticks;
     uint8_t  breath;            // which breath of the snore cycle we are on
     bool     tap_enabled;

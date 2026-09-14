@@ -319,10 +319,19 @@ static const pet_frame_t _pet_frames_barf[] = {
 
 // What stays on the floor once the poo animation has played out: the stem and
 // its base, cell 9's centre and bottom edge. Sits there until swept, so one
-// frame that loops. This is the status layer's whole vocabulary.
+// frame that loops. Both of these are the last frame of the scene that leaves
+// them, so the floor doesn't change the instant the animation ends.
 static const pet_frame_t _pet_frames_pile[] = {
     //  0  1  2  3  4  5  6  7  8  9                                flags  hold
     { { 0, 0, 0, 0, 0, 0, 0, 0, 0, SEG_G | SEG_B | SEG_C },            0,  PET_ANIM_HZ },
+};
+
+// A barf leaves the base without the stem: flatter, and the two read as
+// different things on the floor. The pile is this plus SEG_G, so when both are
+// down the pile alone is drawn and nothing is lost.
+static const pet_frame_t _pet_frames_puddle[] = {
+    //  0  1  2  3  4  5  6  7  8  9                                flags  hold
+    { { 0, 0, 0, 0, 0, 0, 0, 0, 0, SEG_B | SEG_C },                    0,  PET_ANIM_HZ },
 };
 
 // Where each sound belongs, written as the moment rather than the timing. A cue
@@ -396,6 +405,7 @@ static const pet_anim_t _pet_anims[PET_ANIM_COUNT] = {
     [PET_ANIM_BARF]       = { "BARF  ",  PET_FRAMES(_pet_frames_barf),        false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_barf) },
     // the status layer: what stays on the floor
     [PET_ANIM_PILE]       = { "PILE  ",  PET_FRAMES(_pet_frames_pile),        true,  PET_LAYER_STATUS,    PET_NO_CUES },
+    [PET_ANIM_PUDDLE]     = { "PUDDLE",  PET_FRAMES(_pet_frames_puddle),      true,  PET_LAYER_STATUS,    PET_NO_CUES },
 };
 
 
@@ -753,12 +763,18 @@ static bool _pet_start_next_queued(pet_state_t *s) {
     return true;
 }
 
-// The status layer is a direct read of what's on the floor: the pile is there
-// or it isn't. The scenes that put it there play on the character layer, so
-// nothing here can interrupt them.
+// The status layer is a direct read of what's on the floor. The scenes that put
+// it there play on the character layer, so nothing here can interrupt them.
 static void _pet_set_status(pet_state_t *s) {
-    pet_anim_id_t want = (s->has_poo && _pet_mood(s) != PET_MOOD_DEAD)
-                       ? PET_ANIM_PILE : PET_ANIM_NONE;
+    pet_anim_id_t want = PET_ANIM_NONE;
+    if (_pet_mood(s) != PET_MOOD_DEAD) {
+        // While a poo scene is still owed, the floor stays clean: the scene
+        // ends by leaving the pile behind, and putting it there first gives the
+        // ending away. The pile is the puddle plus its stem, so when both are
+        // down drawing the pile alone loses nothing.
+        if (s->has_poo && !s->poo_pending) want = PET_ANIM_PILE;
+        else if (s->has_barf)              want = PET_ANIM_PUDDLE;
+    }
     pet_layer_t *L = &s->layer[PET_LAYER_STATUS];
     L->idle = (uint8_t) want;
     _pet_layer_play(s, PET_LAYER_STATUS, want);
@@ -934,6 +950,26 @@ static void _pet_save(const pet_state_t *s) {
     (void) s;
 }
 
+// A poo on its way has arrived; max one at a time, per the spec. The countdown
+// is wall clock — digestion doesn't stop overnight, only the penalty for
+// leaving the result lying there.
+//
+// Called from the tick as well as from the catch-up. The countdown is twelve
+// hours and the catch-up only runs on activate, so on its own it meant a poo
+// that came due while you were watching went unnoticed until the next visit.
+static bool _pet_poo_arrives(pet_state_t *s, uint32_t now) {
+    if (s->quarter_tics >= PET_QT_DEAD) return false;    // a grave does not digest
+    if (s->has_poo || s->poo_due_ts == 0 || now < s->poo_due_ts) return false;
+    s->has_poo = true;
+    // The spec's "animation plays on revisit if one has been made": the scene
+    // is owed to whoever next has the face open, however stale the drop is.
+    s->poo_pending = true;
+    s->poo_since_ts = s->poo_due_ts;
+    s->poo_residual = 0;
+    s->poo_due_ts = 0;
+    return true;
+}
+
 // Apply everything that should have happened since the last update: passive
 // decay, the missed-feed penalty, the poo arriving, the poo sitting there.
 // Called on every activate ("If Mode hit: return to rest, accumulate 1 tic
@@ -973,19 +1009,7 @@ static void _pet_catch_up(pet_state_t *s) {
             _pet_add_qt(s, (int16_t) PET_TIC(days));
         }
 
-        // A poo on its way has arrived; max one at a time. This countdown is
-        // wall clock — digestion doesn't stop overnight, only the penalty for
-        // leaving the result lying there.
-        if (!s->has_poo && s->poo_due_ts != 0 && now >= s->poo_due_ts) {
-            // Only worth animating if it is happening now. Catching up after a
-            // day away lands a poo that arrived hours ago, and playing the pet
-            // squatting over it then would be a small lie; the pile just shows.
-            s->poo_pending = (now - s->poo_due_ts) < PET_POO_FRESH_SECONDS;
-            s->has_poo = true;
-            s->poo_since_ts = s->poo_due_ts;
-            s->poo_residual = 0;
-            s->poo_due_ts = 0;
-        }
+        _pet_poo_arrives(s, now);
 
         // An unswept poo keeps adding tics, in waking time like passive decay.
         if (s->has_poo) {
@@ -1098,13 +1122,19 @@ static void _pet_hug(pet_state_t *s) {
     _pet_start_anim(s, PET_ANIM_KISS);
 }
 
-// "Sweep clears all": the poo on screen and any that's on its way. Works at
-// night without waking the pet.
+// "Sweep clears all": everything on the floor, the pile and the puddle
+// together. Works at night without waking the pet.
+//
+// What it deliberately does not clear is a poo still on its way. It used to,
+// reading "clears all" as generously as possible, and that quietly made the poo
+// unreachable: press ALARM once out of curiosity after feeding and the
+// twelve-hour countdown was cancelled, so nothing ever landed. The spec's own
+// wording is "clear poo state", which is what is on the floor.
 static void _pet_sweep(pet_state_t *s) {
     if (s->scene == PET_SCENE_DEAD) return;
-    bool had_something = s->has_poo || s->poo_due_ts != 0;
+    bool had_something = s->has_poo || s->has_barf;
     s->has_poo = false;
-    s->poo_due_ts = 0;
+    s->has_barf = false;
     s->poo_residual = 0;
     s->poo_pending = false;
     _pet_set_status(s);
@@ -1124,8 +1154,9 @@ static void _pet_resurrect(pet_state_t *s) {
     s->last_update_ts = now;
     s->last_fed_ts = now;
     s->awake_residual = 0;
-    // The poo does not survive death; resurrection is a clean slate.
+    // The floor does not survive death; resurrection is a clean slate.
     s->has_poo = false;
+    s->has_barf = false;
     s->poo_due_ts = 0;
     s->poo_residual = 0;
     s->poo_pending = false;
@@ -1137,19 +1168,57 @@ static void _pet_resurrect(pet_state_t *s) {
     _pet_start_anim(s, PET_ANIM_RESURRECT);   // then rests into the mood ("blink")
 }
 
-// Play(): motion opens a 5 s window. The first shake is the play; every shake
-// after it inside the window is nausea.
+// Play(): each shake climbs one rung of the ladder next to PET_PLAY_DEAF_SECONDS
+// and then the pet stops listening for a few seconds, so one flick of the wrist
+// counts once however many taps the accelerometer makes of it.
+//
+// Both halves of the pause live in the one countdown: while it is above the
+// window the pet is deaf, and below it a shake is heard. The countdown itself
+// doesn't start until the flourish is off the screen — see _pet_play_tick.
+#define PET_PLAY_WAIT_TICKS ((PET_PLAY_DEAF_SECONDS + PET_PLAY_WINDOW_SECONDS) * PET_ANIM_HZ)
+#define PET_PLAY_OPEN_TICKS (PET_PLAY_WINDOW_SECONDS * PET_ANIM_HZ)
+
+static void _pet_barf(pet_state_t *s) {
+    // Barfing returns the play buff and costs more on top, so over-shaking is
+    // worse than not playing. Only a buff actually granted is returned; the
+    // cooldown stays spent, since a pet just made sick won't go again.
+    _pet_add_qt(s, (s->play_buffed ? PET_BUFF_PLAY : 0) + PET_DEBUFF_BARF);
+    _pet_flash_buff(s, false);
+    // The session is over: no more rungs, and nothing left to wait for.
+    s->scene = PET_SCENE_IDLE;
+    s->play_stage = 0;
+    // And it leaves a puddle to sweep. _pet_set_status only runs when the scene
+    // rests, so the floor changes as the animation finishes rather than before
+    // it has started.
+    s->has_barf = true;
+    _pet_start_anim(s, PET_ANIM_BARF);
+}
+
 static void _pet_on_motion(pet_state_t *s) {
     if (s->scene == PET_SCENE_PLAYING) {
-        if (s->nausea < 255) s->nausea++;
+        // Deaf while the pet settles. This is the whole fix: without it a
+        // single shake arrived as a burst of taps and climbed the ladder in one
+        // go, which is why playing reached barf far more readily than it
+        // reached the second flourish.
+        if (s->play_ticks > PET_PLAY_OPEN_TICKS) return;
+        s->play_stage++;
+        if (s->play_stage >= PET_PLAY_STAGE_BARF) {
+            _pet_barf(s);
+        } else {
+            // Shaken again in the window: the reward for playing on rather than
+            // putting the watch down. Nothing in the spec says what triggers
+            // PLAY_BIG, and this is the reading that makes it earnable.
+            s->play_ticks = PET_PLAY_WAIT_TICKS;
+            _pet_start_anim(s, PET_ANIM_PLAY_BIG);
+        }
         return;
     }
     if (_pet_blocked(s)) return;
 
     uint32_t now = _pet_now();
     s->scene = PET_SCENE_PLAYING;
-    s->nausea = 0;
-    s->play_ticks = PET_PLAY_WINDOW_SECONDS * PET_ANIM_HZ;
+    s->play_stage = 1;
+    s->play_ticks = PET_PLAY_WAIT_TICKS;
 
     // The pet always plays along, but the buff only lands once per cooldown.
     s->play_buffed = (now - s->last_play_buff_ts) >= PET_PLAY_COOLDOWN_SECONDS;
@@ -1162,26 +1231,19 @@ static void _pet_on_motion(pet_state_t *s) {
 }
 
 static void _pet_play_tick(pet_state_t *s) {
+    // Hold the countdown until the flourish has played out, so the window the
+    // owner is offered is the whole of it rather than whatever the animation
+    // leaves over. It also keeps the pet deaf for the length of the animation,
+    // which is where most of the stray taps land.
+    if (_pet_anim_busy(s)) return;
     if (s->play_ticks > 0) {
         s->play_ticks--;
         return;
     }
+    // Nobody shook again: the session ends on whichever rung it reached.
     s->scene = PET_SCENE_IDLE;
-    if (s->nausea > PET_NAUSEA_LIMIT) {
-        // Barfing returns the buff and costs more on top, so over-shaking is
-        // worse than not playing. Only a buff actually granted is returned; the
-        // cooldown stays spent, since a pet just made sick won't go again.
-        _pet_add_qt(s, (s->play_buffed ? PET_BUFF_PLAY : 0) + PET_DEBUFF_BARF);
-        _pet_flash_buff(s, false);
-        _pet_start_anim(s, PET_ANIM_BARF);
-    } else if (s->nausea > 0) {
-        // Nothing in the spec says what triggers PLAY_BIG, so it's a session
-        // with some shaking that stayed under the nausea limit: the reward for
-        // playing enthusiastically but not madly.
-        _pet_start_anim(s, PET_ANIM_PLAY_BIG);
-    } else {
-        _pet_rest(s);
-    }
+    s->play_stage = 0;
+    _pet_rest(s);
 }
 
 // ============================================================================
@@ -1196,7 +1258,7 @@ static void _pet_enter(pet_state_t *s) {
 
     s->queue_len = 0;
     s->food_queue = 0;
-    s->nausea = 0;
+    s->play_stage = 0;
     s->play_buffed = false;
     s->buff_ticks = s->debuff_ticks = s->bell_ticks = s->signal_ticks = 0;
     _pet_layer_play(s, PET_LAYER_CHARACTER, PET_ANIM_NONE);
@@ -1275,16 +1337,31 @@ static void _pet_tick(pet_state_t *s, uint8_t subsecond) {
         default:
             break;
     }
-    if (subsecond == 0) _pet_check_daypart(s);
-    // A poo that has just landed gets its scene, once the pet is free to play
-    // it: never mid-interaction, and never at night, where it would talk over
-    // the snore. Either way the pile is already on the status layer.
-    if (s->poo_pending) {
+    if (subsecond == 0) {
+        _pet_check_daypart(s);
+        // Once a second is plenty for a twelve-hour countdown, and it keeps the
+        // clock read off the other seven ticks.
+        _pet_poo_arrives(s, _pet_now());
+    }
+#if PET_SHOWCASE
+    // The showcase owns the screen while it is up; a poo landing behind it can
+    // wait until the pet has the screen back.
+    bool free_to_play = !s->showcase_on;
+#else
+    const bool free_to_play = true;
+#endif
+    // A poo that has landed unwatched gets its scene, once the pet is free to
+    // play it: never mid-interaction, and never at night, where it would talk
+    // over the snore. Until then the floor stays clean, so the scene is the
+    // first the owner sees of it; skipping it puts the pile straight down.
+    if (s->poo_pending && free_to_play) {
         if (s->scene == PET_SCENE_IDLE && !_pet_anim_busy(s)) {
             s->poo_pending = false;
-            _pet_start_anim(s, PET_ANIM_POO);
+            _pet_start_anim(s, PET_ANIM_POO);   // and _pet_rest leaves the pile
         } else if (s->scene == PET_SCENE_ASLEEP || s->scene == PET_SCENE_DEAD) {
             s->poo_pending = false;
+            _pet_set_status(s);
+            _pet_draw(s);
         }
     }
     _pet_flash_tick(s);
@@ -1313,11 +1390,16 @@ void pet_face_setup(uint8_t watch_face_index, void ** context_ptr) {
 void pet_face_activate(void *context) {
     pet_state_t *s = (pet_state_t *) context;
     movement_request_tick_frequency(PET_ANIM_HZ);
-    // Shake -> EVENT_SINGLE_TAP / EVENT_DOUBLE_TAP, and only while this face is
-    // on screen, since tap detection runs the accelerometer at 400 Hz.
-    // EVENT_ACCELEROMETER_WAKE is never delivered (its callback is commented out
-    // in movement.c), so tap events are the only motion source.
-    s->tap_enabled = movement_enable_tap_detection_if_available(true);
+    // Shake -> EVENT_SINGLE_TAP, and only while this face is on screen, since
+    // tap detection runs the accelerometer at 400 Hz. EVENT_ACCELEROMETER_WAKE
+    // is never delivered (its callback is commented out in movement.c), so tap
+    // events are the only motion source.
+    //
+    // Double tap is left off: the pet treats both events identically, so
+    // enabling it only doubles the number of interrupts one shake produces.
+    // The pacing in _pet_on_motion absorbs that either way, but there is no
+    // reason to spend the events.
+    s->tap_enabled = movement_enable_tap_detection_if_available(false);
 }
 
 bool pet_face_loop(movement_event_t event, void *context) {

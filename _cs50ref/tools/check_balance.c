@@ -55,7 +55,9 @@ static void catch_up(pet_t *p, uint32_t now) {
 static void visit(pet_t *p, uint32_t now, bool feed) {
     catch_up(p, now);
     if (p->qt >= QT_DEAD) return;
-    p->has_poo = false; p->poo_due = 0; p->poo_resid = 0;          // sweep
+    // Sweep: clears the floor, but not a poo still on its way -- that countdown
+    // survives, so a diligent owner still meets every poo they earned.
+    p->has_poo = false; p->poo_resid = 0;
     while (p->hugs_today < HUG_CAP) { p->hugs_today++; add(p, -1); } // hug
     if (feed) { for (int i = 0; i < 4; i++) { add(p, -1); p->fed = now; if (!p->poo_due) p->poo_due = now + POO_DELAY; } }
     if ((now - p->last_play) >= PLAY_COOLDOWN) { p->last_play = now; add(p, -2); } // play

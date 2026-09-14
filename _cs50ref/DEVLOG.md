@@ -1036,3 +1036,122 @@ Movement exposes no chords. The existing gesture stays.
 **The hug stays too, un-refunded.** Undoing it when the 1.5 s press arrives was
 three lines and tempting, but the trade reads better as it is: a pet you stop to
 admire gets a cuddle out of it.
+
+---
+
+## Session 10 — playtesting on the wrist
+
+Dan flashed the firmware and wore it. Two reports came back, and between them
+they turned up three bugs that no check harness could have caught, because each
+one was a rule that was internally consistent and wrong about the world.
+
+### "It doesn't seem to draw the poos or barfs. There's nothing to clear."
+
+Three separate causes, all of which had to be fixed before a poo could be seen
+at all.
+
+**1. Sweeping cancelled digestion.** `_pet_sweep` read the spec's "Sweep clears
+all" to include a poo still on its way, zeroing `poo_due_ts` along with
+`has_poo`. That is a defensible reading of the sentence and a catastrophic one
+in play: `ALARM` is the sweep button, there is nothing to sweep most of the
+time, and pressing it out of curiosity after feeding silently reset the
+twelve-hour countdown. Anyone who touched the button between meals never saw a
+poo in their life. The spec's own tree says `if sweep -> clear poo state`, which
+is what is on the floor; sweep now clears that and leaves the countdown alone.
+
+**2. The poo only arrived on activate.** `_pet_catch_up` runs on `EVENT_ACTIVATE`
+and nowhere else, so an arrival was only ever noticed on the next visit. Now
+`_pet_poo_arrives` is factored out and called from the tick as well, once a
+second.
+
+**3. The scene was gated on freshness.** `PET_POO_FRESH_SECONDS` played the poo
+animation only if the drop was under a minute old, on the reasoning that
+animating the pet squatting over something that landed hours ago is a small lie.
+It is, and it cost the animation its entire existence: a twelve-hour countdown
+expires while the face is in the background, so the odds of a visit landing in
+that minute are about one in seven hundred. The gate is gone. The scene is now
+owed to whoever next has the face open, which is the spec's own wording —
+"animation plays on revisit if one has been made" — and the floor is held clean
+until it plays, so the pile is the scene's ending rather than a spoiler for it.
+
+**And the barf left nothing behind.** `_pet_set_status` only ever asked about
+`has_poo`, so the puddle the barf animation ends on was wiped the moment the
+scene rested. The header had claimed since the layers went in that the status
+layer draws "poo is the stem and base, barf just the puddle" — the art was
+drawn, the second half was never wired up. There is now a `has_barf` flag and a
+`PET_ANIM_PUDDLE` (`B|C`, the pile minus its stem), swept by the same button.
+It charges no tics: the barf already took 0.25 out of the pet on its way past,
+and charging again for the evidence is double jeopardy.
+
+**What this did to the balance.** `check_balance.c` modelled the old sweep, so
+its simulated owner cancelled the countdown on every visit and never paid the
+mess penalty. Fixing the model changes the game:
+
+```text
+                                    d1 d2 d3 d4 d5 d6 d7
+3/day, feed at 08:00 (morning)      5  8 10 13 16 24 24   DEAD   (was healthy)
+3/day, feed at 13:00 (midday)       3  6  8 11 14 16 19   struggling
+3/day, feed at 19:00 (evening)      1  5  5  6  7  7  8   healthy
+```
+
+Verified it is the mess penalty and nothing else by rebuilding the harness with
+the poo decay stubbed out: all three feed times return to healthy. So the
+mechanic simply never bit before. A meal at 08:00 drops a pile around 20:00 that
+sits through the night and into the morning — four waking hours of double decay,
+about 0.67 tic a day — against a care budget that nets barely a quarter tic a
+day in hand. Feed time is now the sharpest lever in the game.
+
+This is left as it is rather than re-tuned in the same change that fixed the
+bug. It is the spec's rate ("+1 tic every 1 tic") applied to the spec's delay,
+and it is now honest. MANUAL.md §8 states the asymmetry outright and names the
+two knobs — `PET_POO_DELAY_SECONDS` and `PET_POO_SECONDS_PER_QT` — if it reads
+as too sharp on the wrist.
+
+### "Too sensitive. Hard to get to the second stage, but really easy for barf"
+
+The old rule opened a 5 s window on the first motion and counted every event
+inside it; more than three was nausea. That counted *interrupts*, not play. Tap
+detection runs the accelerometer at 400 Hz, so one flick of the wrist is a burst
+— and the pet was asking the burst a question it could not answer. A shake
+either registered once, giving `PLAY 1` every time, or overshot the limit
+entirely and barfed. The middle rung was nearly unreachable, which matches
+exactly what Dan saw.
+
+Replaced with Dan's design: a ladder paced by the clock instead of a count.
+
+```text
+shake                -> PLAY 1, then 5 s deaf, then a 5 s window
+shake in that window -> PLAY 2, deaf and a window again
+shake in that window -> barf
+window expires       -> the session ends on whichever rung it reached
+```
+
+Each shake climbs exactly one rung, because after it lands the pet stops
+listening. The count of interrupts stops mattering: whatever the hardware makes
+of one shake, only the first event is heard.
+
+Both halves of the pause live in one countdown — above `PET_PLAY_OPEN_TICKS` the
+pet is deaf, below it a shake is heard — and the countdown does not start until
+`_pet_anim_busy` goes false, so the 10 s runs from the end of the flourish
+rather than from the shake. That was Dan's "start the count *after* the
+animation has played", and it has a second effect worth having: the pet is deaf
+for the whole animation, which is where most of the stray taps land.
+
+Double-tap detection is now off (`movement_enable_tap_detection_if_available(false)`).
+The pet handles `EVENT_SINGLE_TAP` and `EVENT_DOUBLE_TAP` identically, so
+enabling it only doubled the interrupts one shake produced. No behaviour change
+given the pacing, but no reason to spend them.
+
+`nausea` and `PET_NAUSEA_LIMIT` are gone, replaced by `play_stage`.
+
+### What the harnesses did and did not catch
+
+All four still pass, and all four would have passed before this session. That is
+worth writing down: every one of these bugs was a correct implementation of a
+wrong rule. `check_layers` proved the status layer owns cell 9's `G B C` — it
+did, and nothing ever asked it to draw there after a barf. `check_sounds`
+proved the poo cue fires when the pile reaches the floor — it does, in an
+animation that had no way to play. A test suite that only checks internal
+consistency cannot tell you the pet is unreachable; wearing it can.
+
+Flash is 135,248 + 2,124 = 137,372 (56%), up 136 bytes.

@@ -37,7 +37,7 @@ is its eyes; the minutes-tens digit is its mouth.
 | `:` | character | Eyes. One segment — both dots blink together, they cannot wink |
 | `6` | character | Mouth. Carries the whole expression |
 | `4`,`5`,`7`,`8` | character | Body. Yawns, play, the barf on its way out |
-| `9` | shared | The floor. Character sweeps through it on resurrect; status keeps the pile |
+| `9` | shared | The floor. Character sweeps through it on resurrect; status keeps whatever was left there — a pile (`G\|B\|C`) or a barf puddle (`B\|C`) |
 | `1` | character | Off the mouth — snores and kisses drift out here |
 | `3` | procedural | Food. One pip per queued meal (`B C F E` in order), max four |
 | `0` | procedural | Effect. `G\|H` is a plus, `H` alone a minus |
@@ -59,9 +59,9 @@ Long press is 0.5 s; the showcase holds in §10 are 1.5 s.
 | --- | --- | --- |
 | `LIGHT` | Queue a meal | Up to four. Eating starts 3 s after the last press |
 | `LIGHT` hold | Hug | Four a day help; past the cap it is still hugged, it just gains nothing |
-| `ALARM` | Sweep | Clears the floor, and any mess already on its way |
+| `ALARM` | Sweep | Clears the floor — both a pile and a puddle. A poo still on its way is left alone |
 | `ALARM` hold | Resurrect | Only while dead |
-| Shake | Play | Accelerometer tap detection, 5 s window |
+| Shake | Play | Accelerometer tap detection. Each shake climbs a rung; 5 s deaf, then 5 s to shake again |
 | `MODE` | Leave | Movement's default — next face |
 | `LIGHT`/`ALARM` hold 1.5 s | Showcase | Walk the animations, or step the mood. `LIGHT` spends a hug getting there — see §10 |
 
@@ -120,19 +120,55 @@ The pip timer waits on the eat animation rather than cutting it short, so a full
 plate of four takes about 17 s end to end. Twelve hours after a meal the pet
 squats and leaves a pile in cell 9. Until swept it decays at double rate.
 
-The poo scene only plays if the drop is fresh — a catch-up that discovers one
-which landed hours ago just shows the pile.
+The countdown is wall clock, so it usually expires while the face is in the
+background. Whenever it lands, the **scene is owed to you**: the floor stays
+clean until you are there to watch the pet squat, and only then does the pile go
+down. That is the spec's "animation plays on revisit if one has been made". If
+the pet is asleep when you arrive the scene is dropped rather than played over
+the snore, and the pile simply appears.
+
+**Sweeping does not cancel a poo on its way.** It clears the floor and nothing
+else. An earlier build read "sweep clears all" to include the pending countdown,
+which quietly made the poo unreachable: one press of `ALARM` after feeding — out
+of curiosity, with nothing on the floor — reset the twelve hours, so a tidy owner
+never saw a poo at all.
+
+**When you feed decides what the poo costs.** It lands twelve hours later, and
+only waking time is charged, so a meal at 08:00 drops a pile around 20:00 that
+sits through the night and into the morning — four waking hours of double decay.
+The same meal at 19:00 drops it around 07:00, an hour before a morning visit.
+See §8.
 
 ---
 
 ## 5. Playing
 
-Shake to play. The pet plays for as long as you keep shaking, up to 5 s, then
-reacts to how enthusiastic you were: a small routine under the nausea limit, a
-bigger one for a committed session.
+Shake to play. Each shake climbs one rung of a three-rung ladder, and between
+rungs the pet stops listening:
 
-Past the limit it barfs — the buff is returned and a further 0.25 tic added, so
-over-shaking is strictly worse than not playing.
+| Rung | Reached by | Shows |
+| --- | --- | --- |
+| 1 | Any shake while idle | `PLAY 1`, the small flourish |
+| 2 | Shaking again inside the window | `PLAY 2`, the same shape a tone higher |
+| 3 | Shaking again inside the next window | Barf |
+
+After each flourish the pet is **deaf for 5 s**, then **listens for 5 s**. The
+pause is measured from the end of the animation, not from the shake, so the
+window you are offered is the whole of it. Let a window expire and the session
+ends where it stands.
+
+Reaching the third rung barfs — the buff is returned and a further 0.25 tic
+added, so over-shaking is strictly worse than not playing — and leaves a puddle
+in cell 9 to sweep.
+
+This replaced counting taps inside a single 5 s window, which measured how hard
+the watch was shaken rather than how long it was played with. One flick of the
+wrist is a burst of interrupts on a 400 Hz accelerometer, so a shake either
+registered once — `PLAY 1`, every time — or tripped straight past the nausea
+limit into a barf, with almost nothing in between. Pacing the ladder by the
+clock means one shake can only ever count once, whatever the hardware makes of
+it. Double-tap detection is left off for the same reason: the pet treats both
+events identically, so enabling it only doubled the interrupts.
 
 **The buff lands once per 2 h**, regardless of how often you play. Without that
 cooldown, play was the one uncapped source of relief and a shake every 5 s healed
@@ -173,21 +209,34 @@ tics of care a day to hold level. From `check_balance.c`, quarter tics at the en
 of each of seven days:
 
 ```text
-3/day, feed at 13:00 (midday)       3  5  5  6  7  7  8   healthy
+                                    d1 d2 d3 d4 d5 d6 d7
+3/day, feed at 08:00 (morning)      5  8 10 13 16 24 24   DEAD
+3/day, feed at 13:00 (midday)       3  6  8 11 14 16 19   struggling
 3/day, feed at 19:00 (evening)      1  5  5  6  7  7  8   healthy
-2/day (08:00,19:00), feed morning   7 10 12 15 18 24 24   DEAD
+2/day (08:00,19:00), feed morning   7 12 16 24 24 24 24   DEAD
 2/day (08:00,19:00), feed evening   3  7  9 12 15 17 24   DEAD
 1/day (evening only)                1 14 24 24 24 24 24   DEAD
 no care at all                      9 24 24 24 24 24 24   DEAD
 ```
 
-Three visits a day converge and hold around 2 tics. Two a day die within the
-week; one a day dies on day three. A visit worth making is all three actions —
-a full plate of four, all four hugs, and a play if the cooldown is up.
+Three visits a day with an evening meal converge and hold around 2 tics. Two a
+day die within the week; one a day dies on day three. A visit worth making is
+all three actions — a full plate of four, all four hugs, and a play if the
+cooldown is up.
 
-Both feed timings survive, which was not true of an earlier tuning: feeding only
-in the evening used to be a trap, because the poo landed overnight and the pet
-woke up already behind.
+**Feed time is the sharpest lever in the game**, and it only became one when the
+sweep stopped cancelling pending poos (§4). Before that fix a tidy owner cancelled
+the countdown on every visit and never paid the mess penalty at all, so all three
+feed times looked alike and held around 2 tics. They don't: the poo lands twelve
+hours after the meal and charges double decay for every waking hour it sits, so a
+morning meal costs about 0.67 tic a day more than an evening one. Against a care
+budget that nets barely a quarter tic a day, that is the difference between
+holding level and dying on day six.
+
+The knobs, if that reads as too sharp: `PET_POO_DELAY_SECONDS` (12 h — the spec's
+other reading is 1.5 h, which puts the poo on screen while you are still holding
+the watch) and `PET_POO_SECONDS_PER_QT` (currently equal to the passive rate,
+which is the spec's "+1 tic every 1 tic").
 
 **A permanently happy pet is not the target.** Holding at Confused or Upset is a
 realistic week, and the point is to see the whole range of moods rather than one
@@ -224,7 +273,7 @@ the whole set on demand.
 
 | Press | Does |
 | --- | --- |
-| `LIGHT` hold 1.5 s | Hold the next animation on screen. Repeat to walk all fourteen and hand the screen back to the live pet |
+| `LIGHT` hold 1.5 s | Hold the next animation on screen. Repeat to walk all sixteen — the fourteen drawn animations plus the two floor states — and hand the screen back to the live pet |
 | `ALARM` hold 1.5 s | Push the mood up one tic, wrapping past dead back to blissful |
 
 Held animations stay put rather than flashing past once, so one-shots can be
@@ -237,7 +286,7 @@ release under half a second — so nothing is fed and nothing is swept. What doe
 happen:
 
 - **`LIGHT` spends a hug.** Each animation you step through costs one of the four
-  daily hugs and −0.25 tic. Walking all fourteen exhausts the cap four presses
+  daily hugs and −0.25 tic. Walking the whole list exhausts the cap four presses
   in; the rest are no-ops, so the pet ends up a tic healthier and out of hugs.
 - **`ALARM` does nothing** on hardware while the pet is alive. If it is dead, the
   0.5 s press resurrects it before you reach the mood step. In the simulator,
@@ -322,6 +371,15 @@ The other three copy their constants from the firmware rather than including it.
 They are **not** wired to it, so a tunable changed in `pet_face.h` will not fail
 them until it is changed in both — check both if a number moves.
 
+**What they cannot tell you.** All four prove internal consistency, and all four
+passed through a build in which the poo was unreachable: sweeping cancelled the
+countdown that produced it, the arrival was only noticed on activate, and the
+scene was gated on a freshness window that a twelve-hour timer never lands
+inside. `check_layers` proved the status layer owns cell 9's `G B C`, which it
+did; `check_sounds` proved the poo cue fires when the pile reaches the floor,
+which it does — in an animation that had no way to play. A rule can be
+implemented perfectly and still be the wrong rule. Wear it for a day.
+
 ---
 
 ## 13. Redrawing the art
@@ -391,6 +449,13 @@ was *knock when the pile hits the floor*. Offsets are unstable under redraw; the
 moment is not. The snore's period is counted in breaths rather than seconds for
 the same reason — it cannot drift from the animation it describes.
 
+**Motion.** Both halves of the play pause live in one countdown: `play_ticks`
+starts at `(deaf + window) × 8` and is heard only once it drops below
+`window × 8`. It does not start until `_pet_anim_busy` goes false, so the window
+runs from the end of the flourish and the pet is deaf for the animation itself —
+which is where most of the stray taps land. See §5 for why counting taps did not
+work.
+
 **Frame rate** is 8 Hz (`movement_request_tick_frequency` takes powers of two).
 Art is drawn at 8 fps, so one exported frame is one frame on the watch and the
 conversion is `frames ÷ 8 = seconds`. The decoder collapses identical
@@ -415,10 +480,10 @@ that mean opening the watch or rewriting it.
 | Mood resolution | quarter tics, `uint8_t` |
 | Food queue | 4 pips |
 | Hug allowance | 4 / calendar day |
-| Play window / nausea limit | 5 s / 3 |
+| Play ladder | 3 rungs, 5 s deaf + 5 s window between them |
 | Play buff cooldown | 2 h |
 | Mess appears | 12 h after a meal |
 | Fatal at | 6 tics |
 | Animations | 14, decoded from GIF exports |
 | Sounds | 10, cued to frames |
-| Flash | 135,112 text + 2,124 data = 137,236 (56% of 245,760) |
+| Flash | 135,248 text + 2,124 data = 137,372 (56% of 245,760) |
