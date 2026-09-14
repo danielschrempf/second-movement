@@ -89,10 +89,18 @@ cc -O2 -o check_layers check_layers.c && ./check_layers
 | `check_awake_time.c` | The waking-seconds accounting is monotonic and additive, and handles spans over whole nights and both day boundaries. Also prints how long neglect takes to kill the pet | `PET_HOUR_WAKE` / `PET_HOUR_SLEEP` or the decay rate change |
 | `check_balance.c` | Simulates a week of care at different check-in rates and feed timings, printing the mood trajectory | Any tunable in the buff/debuff block changes |
 | `check_sounds.py` | Every sound cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is left unreachable, and every animation has a frame table | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_showcase.py` | From every position in the showcase walk, leaving it by any route puts the live pet back on screen showing its real mood, with nothing on the floor it did not put there | The showcase, `_pet_layer_tick` or `_pet_rest` change, or an animation is added to the walk |
 
 `check_layers.c` and `check_awake_time.c` copy their constants from the
 firmware. They are **not** wired to it, so a tunable changed in `pet_face.h` will
 not fail these until it is changed here too — check both if a number moves.
+
+`check_showcase.py` is half and half. It parses the animation table out of
+`pet_face.c`, and it reads the one behaviour it is actually testing — whether
+leaving the showcase hands the screen back — out of the source too, so reverting
+that fails the check rather than being quietly modelled away. Everything else,
+`_pet_layer_tick` and `_pet_rest` included, is a transcription: change those and
+change them here.
 
 ## Measuring — `redraw_cost.py`
 

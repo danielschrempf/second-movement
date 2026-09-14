@@ -61,7 +61,7 @@ Long press is 0.5 s; the showcase holds in §10 are 1.5 s.
 | `LIGHT` hold | Hug | Four a day help; past the cap it is still hugged, it just gains nothing |
 | `ALARM` | Sweep | Clears the floor — both a pile and a puddle. A poo still on its way is left alone |
 | `ALARM` hold | Resurrect | Only while dead |
-| Shake | Play | Accelerometer tap detection. Each shake climbs a rung; 5 s deaf, then 5 s to shake again |
+| Shake | Play | Accelerometer tap detection. Each shake climbs a rung; 3 s deaf, then 5 s to shake again |
 | `MODE` | Leave | Movement's default — next face |
 | `LIGHT`/`ALARM` hold 1.5 s | Showcase | Walk the animations, or step the mood. `LIGHT` spends a hug getting there — see §10 |
 
@@ -155,14 +155,17 @@ rungs the pet stops listening:
 | 2 | Shaking again inside the window | `PLAY 2`, the same shape a tone higher |
 | 3 | Shaking again inside the next window | Barf |
 
-After each flourish the pet is **deaf for 5 s**, then **listens for 5 s**. The
+After each flourish the pet is **deaf for 3 s**, then **listens for 5 s**. The
 pause is measured from the end of the animation, not from the shake, so the
 window you are offered is the whole of it. Let a window expire and the session
 ends where it stands.
 
 Reaching the third rung barfs — the buff is returned and a further 0.25 tic
 added, so over-shaking is strictly worse than not playing — and leaves a puddle
-in cell 9 to sweep.
+in cell 9 to sweep. The barf serves out one more deaf period before the session
+ends, for the same reason the rungs have one: the tail of the shake that caused
+it would otherwise arrive as a fresh session and replace the barf animation with
+`PLAY 1`, while the puddle and the debuff had already landed.
 
 This replaced counting taps inside a single 5 s window, which measured how hard
 the watch was shaken rather than how long it was played with. One flick of the
@@ -297,12 +300,30 @@ Held animations stay put rather than flashing past once, so one-shots can be
 looked at for as long as you like. Stepping the mood is the fast way to see all
 five expressions in order, death and resurrection included.
 
+A held one-shot never ends, so `_pet_anim_busy` stays true and the scene timers
+that wait on it — feeding and the play ladder — pause for as long as the showcase
+is up. That is left as it is: a queued meal already sits through a 3 s settle
+before the pet starts eating, so waiting out a browse is the same kind of pause,
+and it resumes untouched the moment the screen is handed back. Nothing is lost
+and nothing is charged.
+
 Where the walk has got to is kept in `showcase_anim`, separately from "an
 animation is currently held" (`showcase_on`). It has to be: the 0.5 s long press
 arrives on the way to every 1.5 s hold, and it hands the screen back so the hug
 can show its kiss — so by the time the hold lands, nothing is held. An earlier
 build read the cursor off `showcase_on`, which meant every hold restarted at
 `HAPPY`; with the pet usually happy already, the control looked completely dead.
+
+Leaving the showcase always goes through `_pet_showcase_exit`, which calls
+`_pet_rest`. Clearing `showcase_on` on its own is not enough: it only stops
+`_pet_layer_tick` forcing a one-shot to loop. A one-shot then ends and rests by
+itself, but a looping animation keeps looping, and the two floor states leave the
+character layer on `PET_ANIM_NONE`, which the tick skips entirely — so the
+showcased animation stayed up for good, and you could walk away from the showcase
+with a healthy pet stuck confused, snoring at noon, dead, or gone from the screen
+altogether behind a pile it never made. `check_showcase.py` asserts you can
+always get back.
+
 A short press, a sweep or a shake clears the cursor as well, so leaving the
 showcase properly and coming back starts the walk over.
 
@@ -487,20 +508,39 @@ Numbers in §16.
 starts at `(deaf + window) × 8` and is heard only once it drops below
 `window × 8`. It does not start until `_pet_anim_busy` goes false, so the window
 runs from the end of the flourish and the pet is deaf for the animation itself —
-which is where most of the stray taps land. See §5 for why counting taps did not
-work.
+which is where most of the stray taps land. A barf keeps `PET_SCENE_PLAYING` and
+drops `play_stage` to 0, which reads as deaf whatever the countdown says, so the
+scene survives to the end of the barf animation plus one deaf period rather than
+being replaced by a new session. See §5 for why counting taps did not work.
 
 **Frame rate** is 8 Hz (`movement_request_tick_frequency` takes powers of two).
 Art is drawn at 8 fps, so one exported frame is one frame on the watch and the
 conversion is `frames ÷ 8 = seconds`. The decoder collapses identical
 consecutive poses into one held frame, which is the `hold` field.
 
-**Persistence** is RAM only, and deliberately so. State lives in the face's
-Movement context (`malloc`ed once in `pet_face_setup`); `_pet_load` and
-`_pet_save` are no-ops. It survives face switches and the watch's low-energy
-sleep, so in daily wear a pet lives indefinitely. A reset, a reflash or a battery
-pull hatches a new one — which is reasonable, since all three are deliberate acts
-that mean opening the watch or rewriting it.
+**Persistence** is RAM only. State lives in the face's Movement context,
+`malloc`ed once in `pet_face_setup` and never written anywhere else. It survives
+face switches and the watch's low-energy sleep, so in daily wear a pet lives
+indefinitely; a reflash or a battery pull hatches a new one. That is the whole
+design, not a stub — there is no save format, no load path and none planned. All
+three ways to lose a pet are deliberate acts that mean opening the watch or
+rewriting it, so none of them can happen by surprise.
+
+**One LCD.** The art is drawn for the classic F-91W panel and is only correct
+there, so `_pet_draw` indexes `Classic_LCD_Display_Mapping` directly rather than
+choosing a table at runtime, and `pet_face.c` refuses to compile without
+`FORCE_CLASSIC_LCD_TYPE`:
+
+```
+pet_face.c:37:2: error: #error "pet_face requires the classic LCD. Build with DISPLAY=classic."
+```
+
+`DISPLAY=autodetect` is refused too — it decides at runtime, which is no
+guarantee. A garbled pet is a worse answer than a failed build, and `pet_face.c`
+is listed unconditionally in `watch-faces.mk`, so the refusal stops the whole
+firmware: to build for another panel, drop it from there and drop `pet_face`
+from `movement_config.h`. The segment map in §1 is that panel's; supporting the
+custom LCD means redrawing every animation, not picking a different table.
 
 ---
 
@@ -514,7 +554,7 @@ that mean opening the watch or rewriting it.
 | Mood resolution | quarter tics, `uint8_t` |
 | Food queue | 4 pips |
 | Hug allowance | 4 / calendar day |
-| Play ladder | 3 rungs, 5 s deaf + 5 s window between them |
+| Play ladder | 3 rungs, 3 s deaf + 5 s window between them |
 | Play buff cooldown | 2 h |
 | Mess appears | 12 h after a meal |
 | Fatal at | 6 tics |

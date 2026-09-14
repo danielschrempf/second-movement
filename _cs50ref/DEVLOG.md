@@ -1310,3 +1310,138 @@ the same failure as a cue that never fires.
 
 Net: flash 137,396 -> 137,308, RAM 68 -> 80 bytes (the shadow). The flash saving
 is small because there is not much fat; the display saving is not.
+
+---
+
+## Session 13 — the barf that played `PLAY 1`
+
+**The deaf period, 5 s to 3 s.** Playtesting says the ladder itself works now,
+but five seconds of a pet that ignores you is a long time to stand there holding
+your wrist. Three still swallows the burst of taps a single shake produces,
+which is all it was ever there for. `PET_PLAY_DEAF_SECONDS` is the only thing
+that changed; the window stays at five.
+
+**The barf that played `PLAY 1`.** Third shake, and the pet left a puddle, threw
+the minus sign, charged the tic — and then played the small flourish instead of
+the barf. All of the state was right and only the animation was wrong, which is
+the tell: something was overwriting the animation after `_pet_barf` had already
+run.
+
+`_pet_barf` ended the session by dropping straight to `PET_SCENE_IDLE`. But the
+shake that reached the third rung is still arriving — it is a burst of interrupts
+on a 400 Hz accelerometer, which is the whole reason the ladder is paced by the
+clock. Every one of those taps after the first now found `_pet_on_motion` in the
+scene-idle branch, sailed past `_pet_blocked`, and started a brand new play
+session: `PLAY 1`, over the top of a barf animation two frames old. The barf was
+deaf to nothing, because ending the scene is what turned its deafness off.
+
+So the barf keeps its scene. `play_stage` drops to 0, which now means "the ladder
+is over" rather than only "no session", and `_pet_on_motion` reads stage 0 as
+deaf whatever the countdown says. `play_ticks` is set to one more deaf period, so
+`_pet_play_tick` waits out the animation — it already holds while
+`_pet_anim_busy` — then three more seconds, then rests. The tail of the shake has
+nowhere to land.
+
+The general shape of the bug is worth keeping: a scene is also a guard, and
+handing the screen back before the animation that ends the scene has played is
+how you lose it.
+
+**The comments cut back.** `pet_face.c` carried its own design diary — why the
+tap counting was replaced, why the poo sweep leaves a pending drop alone, what a
+label fallback used to cost. All of that now lives in `MANUAL.md`, which is where
+someone reading *about* the face looks, and none of it belongs next to the line
+it describes. The inline comments say what the line does and what would break if
+you moved it; the reasoning is a link away. `pet_face.c` 1,582 -> 1,418 lines,
+`pet_face.h` 485 -> 428, with no code removed but the barf fix added.
+
+Flash 138,304 text + 2,576 data on GCC 15.3, unchanged by the comment pass, as
+it should be.
+
+---
+
+## Session 14 — leaving the showcase never let go of the screen
+
+Playtesting again: "some of the longer animations have the potential to loop
+forever depending on when the showcase button is pressed."
+
+Reading the code did not find it — the showcase escape switch looked complete,
+every button cleared `showcase_on`, and the walk terminates by construction. So
+I replayed the layer engine in Python against the tables parsed out of
+`pet_face.c` and swept every position in the walk against every way of leaving
+it. 185 of 512 combinations never got back to the live pet.
+
+The bug is that **clearing `showcase_on` is not leaving the showcase.** All it
+does is stop `_pet_layer_tick` forcing a one-shot to loop. That is enough for a
+one-shot — it reaches its last frame and calls `_pet_rest` on the way out, which
+is the only thing in the engine that puts the real pet back. It is not enough
+for anything else:
+
+- a **looping** animation goes on looping, because `loop_here` came from the
+  animation table and never depended on the showcase. Walk to `CONFUSED` and tap
+  `LIGHT` and you have a perfectly happy pet wearing a confused face, forever.
+  `DEAD` is the good one: a tombstone on a pet in no trouble at all.
+- the two **floor states** are worse. `_pet_showcase_next` blanks both layers
+  before starting the next animation, and `PILE`/`PUDDLE` play on the *status*
+  layer — so the character layer is left on `PET_ANIM_NONE`, which
+  `_pet_layer_tick` returns from immediately. Nothing ever reaches `_pet_rest`.
+  The pet is gone from the screen, and a pile it never made sits there lit.
+
+Which is the "depending on when": whether you land on a one-shot or not decides
+whether the screen comes back. The one-shots are the majority of the list, so
+it looks intermittent rather than broken.
+
+The fix is one function. `_pet_showcase_exit(keep_cursor)` clears the flag and
+calls `_pet_rest`, and both escape cases go through it; it only rests if the
+showcase actually had the screen, since `_pet_rest` would otherwise cut short
+whatever the pet was doing on every stray button press. +16 bytes of flash.
+
+**`check_showcase.py`.** The sweep that found it is now a check. The first
+version of it was useless and worth recording why: it modelled the *fixed*
+escape, so it passed against the broken firmware just as happily. A harness that
+transcribes the behaviour under test proves nothing. It now reads that one fact
+— do the escape cases route through a helper that calls `_pet_rest`? — out of
+`pet_face.c`, and reverting the fix fails it, 185 stuck of 512. The rest of the
+engine is still a transcription, which the tools README says out loud.
+
+Same lesson as the barf last session, one level up: a scene, or a mode, is a
+claim on the screen, and the code that gives up the claim has to hand the screen
+back rather than just stop holding it.
+
+---
+
+## Session 15 — reading as deliberate
+
+A pass for things that looked half-built rather than decided. None of it changed
+what the pet does; all of it changed what the code claims about itself.
+
+**Persistence.** `_pet_load` and `_pet_save` were empty functions with three
+call sites, which is exactly what an unimplemented feature looks like. There is
+no save format and none is planned: the pet lives in the face's Movement context
+and a reflash hatches a new one, which is the design. Both functions and all
+three calls are gone, and the header now says so in a sentence.
+
+**The LCD.** `_pet_lcd_map()` chose between `Classic_LCD_Display_Mapping` and
+`Custom_LCD_Display_Mapping` at runtime — but the art is drawn on the classic
+F-91W's segment geometry and is only correct there, so the branch was offering
+support that does not exist. Supporting the custom panel means redrawing sixteen
+animations, not picking a different table. `_pet_draw` indexes the classic table
+directly now. `DISPLAY=custom` still builds.
+
+**Three indicator flags.** `PET_FRAME_PM`, `PET_FRAME_24H` and `PET_FRAME_LAP`
+were defined and handled in `_pet_draw_flags`, and unreachable: the layer masks
+let a frame set only `COLON`, and `_pet_draw` adds only `BELL` and `SIGNAL` from
+state. Three dead branches in the hot draw path, gone with them.
+
+**`<stdio.h>`**, included and unused.
+
+Net 138,320 -> 138,152, so 168 bytes. The point was not the bytes. `_pet_load`
+in particular had already misled the manual, which described the no-ops as
+though a save path were pending.
+
+Follow-up: the custom-LCD build is now refused rather than documented.
+`pet_face.c` requires `FORCE_CLASSIC_LCD_TYPE` and `#error`s without it, which
+also catches `DISPLAY=autodetect` — that resolves the panel at runtime, so it is
+not a guarantee of anything. A garbled pet is a worse answer than a failed
+build. The cost is that `pet_face.c` is listed unconditionally in
+`watch-faces.mk`, so this refuses the whole firmware for another panel, not just
+the face; the error message says which two lines to remove.

@@ -51,23 +51,29 @@
  *   Alarm  1.5 s  Showcase: push the mood up one tic
  *
  * The showcase holds fire their 0.5 s action on the way past, so stepping an
- * animation also hugs the pet. Left in: it is a fair trade, and the short
- * actions never fire, since BUTTON_UP only arrives on a sub-0.5 s release.
+ * animation also hugs the pet.
  *
- * The pet sleeps 21:00–05:00. Nothing decays while it does; disturbing it
- * costs tics and earns no buff. While you're on another face nothing runs;
- * time is caught up lazily the next time the face is activated.
- *
- * Spec: _cs50ref/CS50x Final Project.md, with the reasoning behind every
- * departure from it recorded in _cs50ref/DEVLOG.md.
- *
- * The art and the sounds are all in. Several sounds are cued to specific frames
- * of their animation -- _cs50ref/tools/check_sounds.py asserts they still line
- * up, and wants running after any redraw.
+ * The pet sleeps 21:00-05:00. Nothing decays while it does; disturbing it costs
+ * tics and earns no buff. Nothing runs while you are on another face; time is
+ * caught up lazily on the next activate.
  *
  * The pet answers to the watch's own BTN beep setting: N in the settings face
- * and it is silent. That is the only mute Movement has, so its sounds play at
- * BUZZER_PRIORITY_BUTTON rather than SIGNAL -- see _pet_play_sound.
+ * and it is silent -- see _pet_play_sound.
+ *
+ * Two things this face does not do, by choice rather than omission:
+ *
+ *   The pet lives in RAM. It survives face switches and low-energy sleep, so in
+ *   daily wear it lives indefinitely, but a reflash or a battery pull hatches a
+ *   new one. There is no save format and none is planned.
+ *
+ *   The art is drawn for the classic F-91W LCD and is only correct there. The
+ *   segment geometry below is that panel's, the mapping is not chosen at
+ *   runtime, and pet_face.c refuses to build without DISPLAY=classic.
+ *
+ * Spec: _cs50ref/CS50x Final Project.md. How it behaves and why each timing is
+ * what it is: _cs50ref/MANUAL.md. Process log: _cs50ref/DEVLOG.md. Sounds are
+ * cued to specific frames of their animation, and
+ * _cs50ref/tools/check_sounds.py asserts they still line up after a redraw.
  */
 
 // ---- Tunables ---------------------------------------------------------------
@@ -96,53 +102,31 @@
 #define PET_HUG_CAP                 4   // ... up to -1.0 tic, per calendar day
 #define PET_BUFF_EAT                1   // -0.25 tic per pip eaten
 #define PET_DEBUFF_DISTURB          1   // +0.25 tic each time sleep is disturbed
-// Barfing returns the play buff and costs this on top, so over-shaking ends up
-// worse than never having played.
-#define PET_DEBUFF_BARF             1
+#define PET_DEBUFF_BARF             1   // +0.25 tic on a barf, on top of the returned play buff
 
-// Poo arrives this long after a pip is eaten. The spec gives two different
-// figures; this is Feed()'s explicit "poo countdown (2 tic)". The other reading,
-// 1.5 h, left a poo on screen almost whenever you had fed.
+// Poo arrives this long after a pip is eaten, and then accrues at the same rate
+// as passive decay until it is swept.
 #define PET_POO_DELAY_SECONDS       (2 * PET_SECONDS_PER_TIC)
-// An unswept poo accrues at the same rate as passive decay, so it doubles it.
 #define PET_POO_SECONDS_PER_QT      (PET_SECONDS_PER_QT)
-// The poo scene plays the first time the owner is on the face to see it,
-// however long ago the drop came due. An earlier build only played it if the
-// drop was under a minute old, which was honest about the clock and meant
-// nobody ever saw it: a twelve-hour countdown expires while the face is in the
-// background, and a visit almost never lands in the minute it happens.
-//
-// A barf leaves a puddle behind the same way, minus the countdown: the scene
-// has already been watched, so there is nothing left to replay.
 
 // Feeding
 #define PET_FOOD_MAX                4
 #define PET_FEED_SETTLE_SECONDS     3   // pause after the last press before eating starts
 #define PET_FEED_PIP_SECONDS        1   // between pips
 
-// Play: a ladder of three rungs, paced by the clock rather than by how many
-// taps a shake happens to produce.
-//
-// Counting taps inside one window measured how hard the watch was shaken rather
-// than how long it was played with. A flick of the wrist is a burst of
-// interrupts, so a single shake either registered once — PLAY_SMALL, every time
-// — or tripped clean past the nausea limit into a barf, with almost nothing in
-// between. Now each shake moves the pet up one rung and then the pet is deaf
-// for a while, so one shake can only ever count once:
+// Play: a ladder of three rungs, paced by the clock rather than by how many taps
+// a shake happens to produce.
 //
 //   shake                  -> PLAY_SMALL, then deaf, then a window to shake again
 //   shake in that window   -> PLAY_BIG, deaf and a window again
-//   shake in that window   -> barf
+//   shake in that window   -> barf, then deaf once more before the session ends
 //   window expires         -> the session ends where it stands
 //
-// The deaf period starts when the animation ends rather than when the shake
-// landed, so a flourish never eats into the window the owner is being offered.
-#define PET_PLAY_DEAF_SECONDS       5   // motion ignored while the pet settles
+// Both periods are measured from the end of the animation, not from the shake.
+#define PET_PLAY_DEAF_SECONDS       3   // motion ignored while the pet settles
 #define PET_PLAY_WINDOW_SECONDS     5   // ... and then this long to shake again
 #define PET_PLAY_STAGE_BARF         3   // the rung that makes the pet sick
 // Shaking always plays with the pet, but the buff only lands once per cooldown.
-// Hugs are capped and feeding is limited by poo; without this, play was the one
-// uncapped source of relief and a shake every 5 s healed the pet in a minute.
 #define PET_PLAY_COOLDOWN_SECONDS   (2 * 60 * 60)
 
 // Day parts (local time, 24 h clock)
@@ -150,19 +134,15 @@
 #define PET_HOUR_AFTERNOON          10  // 10:00 afternoon starts
 #define PET_HOUR_SLEEP              21  // 21:00 night starts
 
-// Only waking seconds count against the pet: nothing decays while it sleeps,
-// and the disturb penalty already covers interrupting it. An ignored pet dies
-// in ~40 h of wall clock rather than ~36 h.
+// Only waking seconds count against the pet; nothing decays while it sleeps.
 #define PET_AWAKE_SECONDS_PER_DAY   ((PET_HOUR_SLEEP - PET_HOUR_WAKE) * 60 * 60)
 
 // How long a disturbed pet stays up before settling again.
 #define PET_NIGHT_AWAKE_SECONDS     30
 
-// The pet breathes continuously while it sleeps, but is only audible on some of
-// those breaths -- otherwise the snore never lets up. Two voiced out of every
-// three is what gives it its rhythm. Counted in breaths rather than seconds so
-// it stays tied to the animation: the sound cannot drift out of step with the
-// thing it is describing.
+// The pet breathes on every turn of the sleep loop; only the first two of each
+// three are voiced. Counted in breaths rather than seconds, so the snore cannot
+// drift out of step with the animation.
 #define PET_SNORE_BREATH_CYCLE      3
 #define PET_SNORE_AUDIBLE_BREATHS   2
 
@@ -179,18 +159,15 @@
 #define PET_BUFF_POSITION           0   // plus / minus sign
 #define PET_FOOD_POSITION           3   // the four pips
 
-// Showcase: walk the animations and moods without waiting on the clock. Most of
-// them are gated behind it — angry wants most of a day of neglect, dead a day
-// and a half — so this is how anyone sees the art, and it is as much of the
-// appeal as the game.
+// Showcase: walk the animations and moods without waiting on the clock.
 //
 //   LIGHT held 1.5 s   hold the next animation on screen; walks the whole list
 //                      and then hands the screen back to the live pet
-//   ALARM held 1.5 s   push the mood up one tic, wrapping past dead to blissful
+//   ALARM held 1.5 s   push the mood up one tic, wrapping past dead back to zero
 //
 // Both fire their 0.5 s long-press on the way past, since Movement delivers that
-// first: LIGHT spends a hug, ALARM does nothing unless the pet is dead, in which
-// case it resurrects. Set to 0 for a build where the buttons only play the game.
+// first: LIGHT spends a hug, ALARM resurrects a dead pet and otherwise does
+// nothing. Set to 0 for a build where the buttons only play the game.
 #define PET_SHOWCASE          1
 
 // ---- Frames -----------------------------------------------------------------
@@ -239,11 +216,6 @@
 //   8   smaller, below      7 independent; D+E carry the hardware tick/tock
 //   9   smaller, bottom     7 independent; shared with the status layer
 //
-// Position 7 is the only one that can blink autonomously, which is tempting for
-// snoring, but watch_start_character_blink() takes a character rather than a
-// segment mask and watch_stop_blink() clears the cell outright — using it means
-// giving that cell to the hardware entirely.
-//
 #define SEG_A   (1 << 0)
 #define SEG_B   (1 << 1)
 #define SEG_C   (1 << 2)
@@ -254,13 +226,12 @@
 #define SEG_H   (1 << 7)
 #define SEG_NONE 0
 
-// Non-digit segments a frame can switch on.
+// Non-digit segments a frame can switch on. A frame may only set COLON -- see
+// the layer masks in pet_face.c; BELL and SIGNAL are added by _pet_draw from
+// state, and nothing lights the remaining indicators.
 #define PET_FRAME_COLON     (1 << 0)
 #define PET_FRAME_SIGNAL    (1 << 1)
 #define PET_FRAME_BELL      (1 << 2)
-#define PET_FRAME_PM        (1 << 3)
-#define PET_FRAME_24H       (1 << 4)
-#define PET_FRAME_LAP       (1 << 5)
 
 // One frame of animation: what every position shows, and for how long.
 typedef struct {
@@ -272,9 +243,7 @@ typedef struct {
 // ---- Layers -----------------------------------------------------------------
 //
 // The screen is composited from independent layers, each owning its own cells,
-// so the pet's mood and what's beside it animate separately. Bespoke art per
-// combination was never viable: five moods times five food states times two poo
-// states is fifty full-screen animations against twelve as layers.
+// so the pet's mood and what's beside it animate separately.
 //
 //   CHARACTER   1, 4, 5, 6, 7, 8, colon, and 9's A D E F
 //               moods, eating, kissing, snoring, dying. Position 1 sits off the
@@ -282,13 +251,11 @@ typedef struct {
 //   STATUS      9's G B C — poo is the stem and base, barf just the puddle.
 //
 // Ownership is per segment rather than per position because position 9 is split
-// between the two. That is only safe because 9 has no tied segments; the same
-// split in 4 or 6 would break, since A is tied to D in both.
+// between the two layers. Only safe because 9 has no tied segments.
 //
-// Three things are composited but aren't animations, being a direct function of
-// state: the food pips (position 3, filling B, C, F, E as the queue grows) and
-// the transient marks — the buff/debuff sign in position 0, the dinner BELL,
-// and the SIGNAL blink that stands in for a sound on a silent watch.
+// Composited but not animations, being a direct function of state: the food pips
+// (position 3, filling B, C, F, E as the queue grows), the buff/debuff sign in
+// position 0, the dinner BELL, and the SIGNAL blink.
 typedef enum {
     PET_LAYER_CHARACTER = 0,
     PET_LAYER_STATUS,
@@ -302,13 +269,9 @@ typedef struct {
     uint8_t flags;
 } pet_layer_def_t;
 
-// A sound cued to a moment in the art rather than to a time.
-//
-// The engine fires the cue on the frame where its condition first comes true,
-// so what gets written down is "when the pile reaches the floor" rather than
-// "1.125 seconds in". The difference matters because frame timings move every
-// time an animation is redrawn and the meaning doesn't: a cue follows the
-// drawing, where an offset silently stops matching it.
+// A sound cued to a moment in the art rather than to a time: the engine fires it
+// on the frame where its condition first comes true, so a cue follows a redraw
+// instead of silently drifting out of step with it.
 typedef struct {
     uint8_t sound;              // pet_sound_id_t to play
     uint8_t position;           // the cell to watch
@@ -318,9 +281,8 @@ typedef struct {
 } pet_cue_t;
 
 typedef struct {
-    // NULL only for PET_ANIM_NONE, which is how a layer says it draws nothing.
-    // Every other row must have art: check_sounds.py asserts it, which is what
-    // a runtime fallback used to do at the cost of a string per animation.
+    // NULL only for PET_ANIM_NONE, which is how a layer says it draws nothing;
+    // check_sounds.py asserts every other row has art.
     const pet_frame_t *frames;
     uint8_t count;
     bool loop;
@@ -329,8 +291,7 @@ typedef struct {
     uint8_t cue_count;
 } pet_anim_t;
 
-// Fills in both `frames` and `count` from one table, so the two can never drift
-// apart when an animation is redrawn and comes back a different length.
+// Fill in both `frames` and `count` from one table, so the two cannot drift.
 #define PET_FRAMES(t)   (t), (uint8_t) (sizeof(t) / sizeof((t)[0]))
 #define PET_NO_FRAMES   NULL, 0
 #define PET_CUES(t)     (t), (uint8_t) (sizeof(t) / sizeof((t)[0]))
@@ -364,21 +325,16 @@ typedef enum {
     PET_ANIM_KISS,
     PET_ANIM_SNORE,
     PET_ANIM_WAKE,
-    // the status layer: what the scenes above leave on the floor, which stays
-    // put until it is swept. POO and BARF play on the character layer like any
-    // other one-shot; these are what is still there afterwards. The pile has a
-    // stem, the puddle doesn't — matching the last frame of each scene.
+    // the status layer: what the POO and BARF scenes leave on the floor, which
+    // stays put until swept. The pile has a stem, the puddle doesn't.
     PET_ANIM_PILE,
     PET_ANIM_PUDDLE,
     PET_ANIM_COUNT
 } pet_anim_id_t;
 
-// The spec asks for four; poo and the two play flourishes were added because
-// those moments read as silent without them.
-//
-// Some are in two parts, because the two halves are cued to different moments
-// of the same animation -- the barf's "uh oh" plays over the wriggling mouth,
-// and the slide waits until the contents are actually on their way.
+// Some sounds are in two parts, the halves cued to different moments of the same
+// animation -- the barf's "uh oh" over the wriggling mouth, the slide once the
+// contents are on their way.
 typedef enum {
     PET_SOUND_SNORE_IN = 0,
     PET_SOUND_SNORE_OUT,
@@ -420,21 +376,17 @@ typedef enum {
 #define PET_QUEUE_LEN 4
 
 typedef struct {
-    // -- Pet state. Survives face switches and low-energy mode, so in daily
-    //    wear it persists indefinitely; only a battery pull, a reflash or a
-    //    crash hatches a new pet. See _pet_load for why that's deliberate.
+    // -- Pet state. Survives face switches and low-energy mode, never a reflash.
     uint8_t  quarter_tics;
     bool     has_poo;
-    // A barf leaves a puddle to sweep too. It is kept apart from has_poo
-    // because the two are drawn differently and only the poo goes on charging
-    // tics — the barf has already taken its own out of the pet.
+    // A barf leaves a puddle to sweep too. Separate from has_poo: the two are
+    // drawn differently, and only the poo goes on charging tics.
     bool     has_barf;
     uint32_t last_update_ts;    // decay applied up to here (UTC)
     uint32_t last_fed_ts;       // for the missed-day penalty
     uint32_t poo_due_ts;        // a poo is on its way; 0 = none pending
     uint32_t poo_since_ts;      // the current poo has been sitting since here
-    // Waking seconds counted but not yet worth a whole quarter tic. Carried
-    // rather than rounded away, or frequent visits would outrun decay.
+    // Waking seconds counted but not yet worth a whole quarter tic.
     uint16_t awake_residual;
     uint16_t poo_residual;
     uint32_t last_play_buff_ts; // the play cooldown runs from here
@@ -455,15 +407,15 @@ typedef struct {
     uint8_t  food_queue;
     uint16_t feed_ticks;
     uint16_t play_ticks;        // deaf period plus window, counted down together
-    uint8_t  play_stage;        // rung of the play ladder: 0 idle, 1 small, 2 big
+    uint8_t  play_stage;        // rung of the play ladder: 1 small, 2 big; 0 is
+                                // idle, or a barf serving out its deaf period
     bool     play_buffed;       // did this play session actually earn the buff?
     bool     poo_pending;       // a poo has landed unwatched; play the scene when idle
     uint16_t night_awake_ticks;
     uint8_t  breath;            // which breath of the snore cycle we are on
     bool     tap_enabled;
     // What is on the LCD right now, so a redraw only touches the cells that
-    // changed. `stale` forces the next redraw to push everything, for when
-    // something outside this face has cleared the display.
+    // changed. `stale` forces the next redraw to push everything.
     uint8_t  shadow[10];
     uint8_t  shadow_flags;
     bool     shadow_stale;
