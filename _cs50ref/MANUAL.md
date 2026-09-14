@@ -255,7 +255,7 @@ monophonic square wave, so pitch and rhythm are the only tools.
 | Sound | Cue | Is |
 | --- | --- | --- |
 | Snore in / out | loop start; cell 1 `D` lights | High then low, the low landing on the puff |
-| Kiss | cell 6 `G` lights | Chromatic trill up as the pucker completes |
+| Kiss | cell 6 `G` lights | Four chromatic semitones in 1/8 s — a peck, not a trill |
 | Eat gulp | cell 7 clears | Mid chirp on the swallow |
 | Eat chew | cell 6 `G` lights | One thud per jaw movement — fires three times |
 | Barf uh-oh | barf begins | Two falling notes over the wobbling mouth |
@@ -377,7 +377,7 @@ python3 check_sounds.py
 | `check_layers.c` | The procedural cells are off limits to every layer, the two layers overlap only in cell 9 where that is intended, and a rogue frame gets clipped | The region map or `_pet_layers` changes |
 | `check_awake_time.c` | Waking-seconds accounting is monotonic and additive over 400 spans, and handles whole nights and both day boundaries. Prints time-to-death from four start hours | `PET_HOUR_WAKE`/`PET_HOUR_SLEEP` or the decay rate change |
 | `check_balance.c` | A week of care at different visit rates and feed timings, printing the mood trajectory | Any tunable in the buff/debuff block changes |
-| `check_sounds.py` | Every cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, and no sound is unreachable | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_sounds.py` | Every cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is unreachable, and every animation has art | **Any animation is redrawn**, or a cue or sound is edited |
 
 `check_sounds.py` parses `pet_face.c` directly, so it cannot go stale. Sample:
 
@@ -475,6 +475,14 @@ was *knock when the pile hits the floor*. Offsets are unstable under redraw; the
 moment is not. The snore's period is counted in breaths rather than seconds for
 the same reason — it cannot drift from the animation it describes.
 
+**The shadow.** `_pet_draw` composites into a ten-byte framebuffer and then
+pushes only the cells that differ from what it last wrote, because a frame of
+animation typically moves one cell out of ten and repainting a cell costs up to
+sixteen SLCD register writes. `_pet_invalidate` marks the shadow stale on
+activate and on a low-energy update, since Movement clears the display on a face
+switch and the shadow would otherwise describe a screen that no longer exists.
+Numbers in §16.
+
 **Motion.** Both halves of the play pause live in one countdown: `play_ticks`
 starts at `(deaf + window) × 8` and is heard only once it drops below
 `window × 8`. It does not start until `_pet_anim_busy` goes false, so the window
@@ -513,4 +521,85 @@ that mean opening the watch or rewriting it.
 | Animations | 14, decoded from GIF exports |
 | Sounds | 10, cued to frames, at `BUZZER_PRIORITY_BUTTON` |
 | Muting | Follows the watch's `BTN beep` setting (`N` = silent) |
-| Flash | 135,272 text + 2,124 data = 137,396 (56% of 245,760) |
+| Flash | 135,192 text + 2,116 data = 137,308 (56% of 245,760) |
+| — of which is this face | **5,904 bytes**, 2.40% of the budget — see §16 |
+| RAM | **80 bytes** of context + 8 bytes of Movement's per-face arrays |
+
+---
+
+## 16. What it costs
+
+Measured by building the same firmware with and without `pet_face` in
+`movement_config.h` (PC, GCC 14.2):
+
+| | text | data | bss |
+| --- | --- | --- | --- |
+| With the pet | 135,192 | 2,116 | 4,600 |
+| Without | 129,368 | 2,036 | 4,592 |
+| **The face** | **+5,824** | **+80** | **+8** |
+
+**5,904 bytes of flash**, 2.40% of the 245,760 available, leaving ~106 KB free.
+Where it goes:
+
+| | bytes |
+| --- | --- |
+| `pet_face_loop` — the whole state machine, since every `_pet_*` helper is static and gets inlined into it | 1,952 |
+| The fourteen frame tables | 1,812 |
+| `_pet_draw` — the compositor | 516 |
+| `_pet_anims` | 272 |
+| Everything else (cue engine, waking-time maths, layer engine) | ~1,270 |
+| The ten sound sequences (`data`) | 80 |
+
+**88 bytes of RAM.** `sizeof(pet_state_t)` is 80, `malloc`ed once in
+`pet_face_setup` and never freed; Movement's `watch_face_contexts` and
+`scheduled_tasks` arrays each grow by one entry. That is 0.27% of the 32 KB.
+
+### Battery
+
+**Nothing runs while the face is off screen.** `pet_face_resign` drops the tick
+back to 1 Hz and turns tap detection off, and Movement's inactivity timeout
+(default **60 s**, `to_interval`) returns to face 0 by itself. So the whole
+extra cost is bounded by *how long the pet is on screen* — a handful of minutes
+a day — and is exactly zero the rest of the time. The pet never reaches
+low-energy mode, because it resigns long before the LE interval.
+
+While it *is* on screen, against the stock clock face:
+
+| | Stock clock | Pet |
+| --- | --- | --- |
+| Tick | 1 Hz | **8 Hz** |
+| Accelerometer | powered down (the default background rate) | **400 Hz, low-noise** |
+| LCD writes | on the second | on frame changes only |
+
+The accelerometer is the dominant term by a wide margin, and it is what
+shake-to-play costs. It is turned off while the pet is dead, where motion is
+ignored anyway.
+
+The display work was cut by keeping a shadow of what is on the LCD and pushing
+only the cells that changed. Replaying every animation (`redraw_cost.py`
+in `tools/` — it reuses `check_sounds.py`'s parser) gives:
+
+```text
+143 frame transitions across all sixteen animations
+  before: 10 cells repainted per redraw
+  after:   1.05                            -> 90% fewer
+```
+
+And in the state the face actually spends its time in — resting on a mood loop —
+the saving is close to total, because the blink is carried by the colon, which
+is a flag rather than a cell:
+
+| Resting on | Before | After |
+| --- | --- | --- |
+| Happy / Upset / Angry | 35 cell repaints/s | **0**, plus 3 colon flips/s |
+| Confused | 10 /s | **1** /s |
+| Dead | 20 /s | **0** |
+
+Each cell repaint is up to sixteen SLCD register read-modify-writes, so this is
+most of the per-tick work gone.
+
+**What is not measured here is absolute current.** The µA figures would need the
+LIS2DW12 datasheet's consumption table or a bench measurement across the battery;
+neither is something this document should guess at. The configuration to look up
+is `LIS2DW_MODE_LOW_POWER` + `LIS2DW_LP_MODE_1` + `LIS2DW_DATA_RATE_HP_400_HZ`
+with low-noise on, set in `movement_enable_tap_detection_if_available`.

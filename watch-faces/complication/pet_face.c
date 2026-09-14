@@ -382,30 +382,30 @@ static const pet_cue_t _pet_cues_play_big[] = {
 };
 
 static const pet_anim_t _pet_anims[PET_ANIM_COUNT] = {
-    //                          label     frames and count                    loop   layer                cues and count
-    [PET_ANIM_NONE]       = { "      ",  PET_NO_FRAMES,                       false, PET_LAYER_CHARACTER, PET_NO_CUES },
+    //                        frames and count                      loop   layer                cues and count
+    [PET_ANIM_NONE]       = { PET_NO_FRAMES,                       false, PET_LAYER_CHARACTER, PET_NO_CUES },
     // moods: loop while the pet rests
-    [PET_ANIM_HAPPY]      = { "HAPPY ",  PET_FRAMES(_pet_frames_happy),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
-    [PET_ANIM_CONFUSED]   = { "CONFUS",  PET_FRAMES(_pet_frames_confused),    true,  PET_LAYER_CHARACTER, PET_NO_CUES },
-    [PET_ANIM_UPSET]      = { "UPSET ",  PET_FRAMES(_pet_frames_upset),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
-    [PET_ANIM_ANGRY]      = { "ANGRY ",  PET_FRAMES(_pet_frames_angry),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
-    [PET_ANIM_DEAD]       = { "DEAD  ",  PET_FRAMES(_pet_frames_dead),        true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_HAPPY]      = { PET_FRAMES(_pet_frames_happy),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_CONFUSED]   = { PET_FRAMES(_pet_frames_confused),    true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_UPSET]      = { PET_FRAMES(_pet_frames_upset),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_ANGRY]      = { PET_FRAMES(_pet_frames_angry),       true,  PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_DEAD]       = { PET_FRAMES(_pet_frames_dead),        true,  PET_LAYER_CHARACTER, PET_NO_CUES },
     // one-shots
-    [PET_ANIM_RESURRECT]  = { "GHOST ",  PET_FRAMES(_pet_frames_resurrect),   false, PET_LAYER_CHARACTER, PET_NO_CUES },
-    [PET_ANIM_PLAY_SMALL] = { "PLAY 1",  PET_FRAMES(_pet_frames_play_small),  false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_play_small) },
-    [PET_ANIM_PLAY_BIG]   = { "PLAY 2",  PET_FRAMES(_pet_frames_play_big),    false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_play_big) },
-    [PET_ANIM_EAT]        = { "EAT   ",  PET_FRAMES(_pet_frames_eat),         false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_eat) },
-    [PET_ANIM_KISS]       = { "KISS  ",  PET_FRAMES(_pet_frames_kiss),        false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_kiss) },
-    [PET_ANIM_SNORE]      = { "SNORE ",  PET_FRAMES(_pet_frames_snore),       true,  PET_LAYER_CHARACTER, PET_CUES(_pet_cues_snore) },
-    [PET_ANIM_WAKE]       = { "WAKE  ",  PET_FRAMES(_pet_frames_wake),        false, PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_RESURRECT]  = { PET_FRAMES(_pet_frames_resurrect),   false, PET_LAYER_CHARACTER, PET_NO_CUES },
+    [PET_ANIM_PLAY_SMALL] = { PET_FRAMES(_pet_frames_play_small),  false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_play_small) },
+    [PET_ANIM_PLAY_BIG]   = { PET_FRAMES(_pet_frames_play_big),    false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_play_big) },
+    [PET_ANIM_EAT]        = { PET_FRAMES(_pet_frames_eat),         false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_eat) },
+    [PET_ANIM_KISS]       = { PET_FRAMES(_pet_frames_kiss),        false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_kiss) },
+    [PET_ANIM_SNORE]      = { PET_FRAMES(_pet_frames_snore),       true,  PET_LAYER_CHARACTER, PET_CUES(_pet_cues_snore) },
+    [PET_ANIM_WAKE]       = { PET_FRAMES(_pet_frames_wake),        false, PET_LAYER_CHARACTER, PET_NO_CUES },
     // Scenes: the pet does something and leaves cell 9 changed. Drawn as whole
     // scenes rather than as a detached blob, so they play on the character
     // layer; the status layer keeps whatever is left on the floor afterwards.
-    [PET_ANIM_POO]        = { "POO   ",  PET_FRAMES(_pet_frames_poo),         false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_poo) },
-    [PET_ANIM_BARF]       = { "BARF  ",  PET_FRAMES(_pet_frames_barf),        false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_barf) },
+    [PET_ANIM_POO]        = { PET_FRAMES(_pet_frames_poo),         false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_poo) },
+    [PET_ANIM_BARF]       = { PET_FRAMES(_pet_frames_barf),        false, PET_LAYER_CHARACTER, PET_CUES(_pet_cues_barf) },
     // the status layer: what stays on the floor
-    [PET_ANIM_PILE]       = { "PILE  ",  PET_FRAMES(_pet_frames_pile),        true,  PET_LAYER_STATUS,    PET_NO_CUES },
-    [PET_ANIM_PUDDLE]     = { "PUDDLE",  PET_FRAMES(_pet_frames_puddle),      true,  PET_LAYER_STATUS,    PET_NO_CUES },
+    [PET_ANIM_PILE]       = { PET_FRAMES(_pet_frames_pile),        true,  PET_LAYER_STATUS,    PET_NO_CUES },
+    [PET_ANIM_PUDDLE]     = { PET_FRAMES(_pet_frames_puddle),      true,  PET_LAYER_STATUS,    PET_NO_CUES },
 };
 
 
@@ -423,14 +423,15 @@ static const pet_anim_t _pet_anims[PET_ANIM_COUNT] = {
 static int8_t _pet_sound_snore_in[]  = { BUZZER_NOTE_C6, 32, 0 };
 static int8_t _pet_sound_snore_out[] = { BUZZER_NOTE_C5, 32, 0 };
 
-// Chromatic, up and quick, riding the kiss out of the pucker.
+// Chromatic, up and quick, riding the kiss out of the pucker. A peck rather
+// than a trill: four semitones at 1/32 s each is 1/8 s in total, against the
+// 0.3 s it ran to before. Same gesture and the same note on top, started closer
+// to it, so it snaps instead of sliding.
 static int8_t _pet_sound_kiss[] = {
-    BUZZER_NOTE_C6,              3,
-    BUZZER_NOTE_C6SHARP_D6FLAT,  3,
-    BUZZER_NOTE_D6,              3,
-    BUZZER_NOTE_D6SHARP_E6FLAT,  3,
-    BUZZER_NOTE_E6,              3,
-    BUZZER_NOTE_F6,              4,
+    BUZZER_NOTE_D6,              2,
+    BUZZER_NOTE_D6SHARP_E6FLAT,  2,
+    BUZZER_NOTE_E6,              2,
+    BUZZER_NOTE_F6,              2,
     0
 };
 
@@ -542,6 +543,18 @@ static pet_anim_id_t _pet_mood_anim(pet_mood_t mood) {
     }
 }
 
+// Tap detection runs the accelerometer at 400 Hz in low-noise mode, and is by
+// a wide margin the most expensive thing this face does. A dead pet ignores
+// motion entirely — _pet_blocked turns every shake away — so there is nothing
+// to listen for, and the watch shouldn't pay for it. Cheap to call: it only
+// touches the hardware when the answer actually changes.
+static void _pet_set_tap_detection(pet_state_t *s, bool want) {
+    if (want == s->tap_enabled) return;
+    if (want) movement_enable_tap_detection_if_available(false);
+    else      movement_disable_tap_detection_if_available();
+    s->tap_enabled = want;
+}
+
 // Add (or subtract) quarter tics, pinned to 0 .. dead.
 static void _pet_add_qt(pet_state_t *s, int16_t delta) {
     int16_t v = (int16_t) s->quarter_tics + delta;
@@ -596,12 +609,19 @@ static uint32_t _pet_awake_between(uint32_t from_ts, uint32_t to_ts) {
 // 3. Compositor
 // ============================================================================
 
+// Which mapping table this watch's LCD uses. Read once per draw rather than
+// once per cell: watch_get_lcd_type() is a function call and the answer cannot
+// change between two cells of the same frame.
+static const digit_mapping_t *_pet_lcd_map(void) {
+    return (watch_get_lcd_type() == WATCH_LCD_TYPE_CUSTOM)
+        ? Custom_LCD_Display_Mapping
+        : Classic_LCD_Display_Mapping;
+}
+
 // Light exactly the segments in mask at one LCD position. Clears everything
 // first so a tied pair (e.g. 6A/6D) ends up on if either half was asked for.
-static void _pet_draw_position(uint8_t position, uint8_t mask) {
-    const digit_mapping_t *map = (watch_get_lcd_type() == WATCH_LCD_TYPE_CUSTOM)
-        ? &Custom_LCD_Display_Mapping[position]
-        : &Classic_LCD_Display_Mapping[position];
+static void _pet_draw_position(const digit_mapping_t *maps, uint8_t position, uint8_t mask) {
+    const digit_mapping_t *map = &maps[position];
 
     for (uint8_t i = 0; i < 8; i++) {
         if (map->segment[i].value == segment_does_not_exist) continue;
@@ -626,22 +646,19 @@ static void _pet_draw_flags(uint8_t flags) {
 // Composite every layer into one framebuffer and push it to the LCD. Each
 // layer contributes only the segments it owns, so they can be timed and changed
 // independently; stray bits in a frame are masked off rather than trusted.
-static void _pet_draw(const pet_state_t *s) {
+//
+// Only the cells that actually changed are pushed. A frame of animation usually
+// moves one or two of the ten, and every cell costs up to sixteen register
+// read-modify-writes to repaint, so comparing against the shadow first is the
+// difference between ~160 of those per redraw and ~16. At eight redraws a
+// second, on a watch, that is worth the ten bytes of state.
+static void _pet_draw(pet_state_t *s) {
     uint8_t fb[10] = { 0 };
     uint8_t flags = 0;
-    const char *label = NULL;
 
     for (uint8_t l = 0; l < PET_LAYER_COUNT; l++) {
         const pet_anim_t *a = &_pet_anims[s->layer[l].anim];
         if (s->layer[l].anim == PET_ANIM_NONE) continue;
-        if (a->frames == NULL) {
-            // Every animation has art now, so nothing reaches this. It stays as
-            // the fallback for a row added to _pet_anims before its frames are
-            // drawn: the character's name stands in below rather than the face
-            // going blank, and any other layer simply draws nothing.
-            if (l == PET_LAYER_CHARACTER) label = a->label;
-            continue;
-        }
         const pet_frame_t *f = &a->frames[s->layer[l].frame];
         const pet_layer_def_t *d = &_pet_layers[l];
         for (uint8_t p = 0; p < 10; p++) fb[p] |= f->seg[p] & d->seg[p];
@@ -661,14 +678,25 @@ static void _pet_draw(const pet_state_t *s) {
     if (s->bell_ticks)   flags |= PET_FRAME_BELL;
     if (s->signal_ticks) flags |= PET_FRAME_SIGNAL;
 
-    for (uint8_t p = 0; p < 10; p++) _pet_draw_position(p, fb[p]);
-    _pet_draw_flags(flags);
-
-    // The fallback above: the animation's name in positions 4-8. Cell 9 is left
-    // alone so the pile still shows beside it.
-    if (label) {
-        for (uint8_t i = 0; i < 5 && label[i]; i++) watch_display_character(label[i], 4 + i);
+    const digit_mapping_t *maps = NULL;
+    for (uint8_t p = 0; p < 10; p++) {
+        if (fb[p] == s->shadow[p] && !s->shadow_stale) continue;
+        if (maps == NULL) maps = _pet_lcd_map();
+        _pet_draw_position(maps, p, fb[p]);
+        s->shadow[p] = fb[p];
     }
+    if (flags != s->shadow_flags || s->shadow_stale) {
+        _pet_draw_flags(flags);
+        s->shadow_flags = flags;
+    }
+    s->shadow_stale = false;
+}
+
+// The LCD holds what was last written to it, so the shadow is only valid while
+// nothing else has touched the display. Movement calls watch_clear_display() on
+// every face switch, which is exactly what this has to be told about.
+static void _pet_invalidate(pet_state_t *s) {
+    s->shadow_stale = true;
 }
 
 // ============================================================================
@@ -873,6 +901,10 @@ static void _pet_rest(pet_state_t *s) {
     pet_mood_t mood = _pet_mood(s);
     s->queue_len = 0;
     _pet_set_status(s);
+    // Every route in and out of death passes through here, including the
+    // showcase's mood step, so this is where the accelerometer is turned off
+    // and back on.
+    _pet_set_tap_detection(s, mood != PET_MOOD_DEAD);
 
     if (mood == PET_MOOD_DEAD) {
         s->scene = PET_SCENE_DEAD;
@@ -1276,6 +1308,10 @@ static void _pet_enter(pet_state_t *s) {
     _pet_catch_up(s);
     _pet_save(s);
 
+    // Movement clears the display on every face switch, so nothing the shadow
+    // remembers from the last visit is still on the LCD.
+    _pet_invalidate(s);
+
     s->queue_len = 0;
     s->food_queue = 0;
     s->play_stage = 0;
@@ -1293,11 +1329,14 @@ static void _pet_enter(pet_state_t *s) {
 
     pet_mood_t mood = _pet_mood(s);
     if (mood == PET_MOOD_DEAD) {
-        // Hold the tombstone until resurrected.
+        // Hold the tombstone until resurrected. This path skips _pet_rest, so
+        // it has to turn the accelerometer down itself.
         s->scene = PET_SCENE_DEAD;
+        _pet_set_tap_detection(s, false);
         _pet_start_anim(s, PET_ANIM_DEAD);
         return;
     }
+    _pet_set_tap_detection(s, true);
 
     watch_date_time_t local = movement_get_local_date_time();
     switch (_pet_daypart(local.unit.hour)) {
@@ -1420,7 +1459,10 @@ void pet_face_activate(void *context) {
     // enabling it only doubles the number of interrupts one shake produces.
     // The pacing in _pet_on_motion absorbs that either way, but there is no
     // reason to spend the events.
-    s->tap_enabled = movement_enable_tap_detection_if_available(false);
+    //
+    // Switched on from _pet_enter rather than here, once the catch-up has said
+    // whether the pet is alive to shake — see _pet_set_tap_detection.
+    s->tap_enabled = false;
 }
 
 bool pet_face_loop(movement_event_t event, void *context) {
@@ -1515,6 +1557,9 @@ bool pet_face_loop(movement_event_t event, void *context) {
             movement_move_to_face(0);
             break;
         case EVENT_LOW_ENERGY_UPDATE:
+            // Whatever went on screen on the way into low energy mode is not
+            // what the shadow remembers, so push the whole frame.
+            _pet_invalidate(s);
             _pet_draw(s);
             break;
 
@@ -1529,9 +1574,9 @@ bool pet_face_loop(movement_event_t event, void *context) {
 void pet_face_resign(void *context) {
     pet_state_t *s = (pet_state_t *) context;
     movement_request_tick_frequency(1);
-    if (s->tap_enabled) {
-        movement_disable_tap_detection_if_available();
-        s->tap_enabled = false;
-    }
+    // Leaving the face is what stops the pet costing anything at all: the tick
+    // drops back to 1 Hz and the accelerometer back to its background rate,
+    // which on a stock configuration is powered down.
+    _pet_set_tap_detection(s, false);
     _pet_save(s);
 }

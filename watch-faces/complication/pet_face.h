@@ -318,7 +318,9 @@ typedef struct {
 } pet_cue_t;
 
 typedef struct {
-    const char *label;          // fallback if a row has no frames yet
+    // NULL only for PET_ANIM_NONE, which is how a layer says it draws nothing.
+    // Every other row must have art: check_sounds.py asserts it, which is what
+    // a runtime fallback used to do at the cost of a string per animation.
     const pet_frame_t *frames;
     uint8_t count;
     bool loop;
@@ -459,6 +461,12 @@ typedef struct {
     uint16_t night_awake_ticks;
     uint8_t  breath;            // which breath of the snore cycle we are on
     bool     tap_enabled;
+    // What is on the LCD right now, so a redraw only touches the cells that
+    // changed. `stale` forces the next redraw to push everything, for when
+    // something outside this face has cleared the display.
+    uint8_t  shadow[10];
+    uint8_t  shadow_flags;
+    bool     shadow_stale;
     bool     showcase_on;       // PET_SHOWCASE: an animation is held on screen
     uint8_t  showcase_anim;     // ... and which one, so stepping walks the list
 } pet_state_t;

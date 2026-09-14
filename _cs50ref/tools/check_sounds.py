@@ -45,11 +45,15 @@ def read_frames(src):
     for m in re.finditer(r"static const pet_frame_t _pet_frames_(\w+)\[\]\s*=\s*\{(.*?)\n\};",
                          src, re.S):
         poses = []
-        for row in re.finditer(r"\{\s*\{(.*?)\}\s*,\s*([^,]+?)\s*,\s*(\d+)\s*\}",
+        # The hold is usually a literal, but a single-frame table that just sits
+        # there writes PET_ANIM_HZ. Missing that meant the pile and the puddle
+        # parsed as having no frames at all, and went unchecked.
+        for row in re.finditer(r"\{\s*\{(.*?)\}\s*,\s*([^,]+?)\s*,\s*(\d+|PET_ANIM_HZ)\s*\}",
                                m.group(2), re.S):
             seg = [seg_value(c) for c in row.group(1).split(",")]
             if len(seg) == 10:
-                poses.append((seg, int(row.group(3))))
+                hold = HZ if row.group(3) == "PET_ANIM_HZ" else int(row.group(3))
+                poses.append((seg, hold))
         if poses:
             out[m.group(1)] = poses
     return out
@@ -98,6 +102,9 @@ def read_anims(src):
     """[(anim, frames_name, loops, cues_name)]"""
     table = src[src.index("static const pet_anim_t _pet_anims"):]
     table = table[:table.index("\n};")]
+    # Start after the "= {", or the array's own [PET_ANIM_COUNT] dimension reads
+    # as a row whose frames are the first PET_NO_FRAMES it can find.
+    table = table[table.index("= {") + 3:]
     out = []
     for row in re.finditer(
             r"\[PET_ANIM_(\w+)\]\s*=\s*\{.*?(PET_NO_FRAMES|PET_FRAMES\((\w+)\))\s*,"
@@ -204,6 +211,17 @@ def main():
                 check("%s: repeats leave room for the sound" % label, gap >= need,
                       "%d fires, closest %d ticks apart, sound is %.1f ticks"
                       % (len(at), gap, need))
+
+    print()
+    # Every animation but NONE must have art. pet_face.c used to carry a name
+    # string per animation and draw that when frames were missing, which cost
+    # around 200 bytes of flash for a fallback that could never fire in a
+    # finished build. This is the same guarantee, checked here instead.
+    for anim, fname, _loops, _cname in anims:
+        if anim == "NONE":
+            continue
+        check("%s: has art" % anim.lower(), bool(fname) and fname in frames,
+              "" if fname else "PET_NO_FRAMES -- this animation draws nothing")
 
     print()
     # A sound nothing cues is dead weight, and usually means a cue was dropped.

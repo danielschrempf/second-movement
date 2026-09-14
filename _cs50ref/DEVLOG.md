@@ -1221,3 +1221,92 @@ the most literal way, since stepping to the animation already on screen is
 indistinguishable from the button not working.
 
 Flash is 135,272 + 2,124 = 137,396 (56%), up 24 bytes.
+
+---
+
+## Session 12 — a peck, and what the pet costs
+
+### The kiss
+
+Down from six semitones at 3/64 s each (19/64 s ≈ 0.3 s) to four at 2/64 s
+(8/64 s = 0.125 s). Same chromatic shape and the same F6 on top, started closer
+to it so there is less distance to travel. A peck rather than a trill.
+
+### What it costs
+
+Measured by building the same firmware twice, once with `pet_face` in
+`movement_config.h` and once without. Worth recording that the first attempt
+reported *zero* difference: `movement_config.h` has CRLF line endings on the PC
+(gotcha 4's neighbourhood), so `sed "/^    pet_face,$/d"` never matched and both
+builds were identical. The lesson is the one this repo keeps teaching — a
+measurement that comes back suspiciously clean is usually measuring nothing.
+
+```
+with     135,192 text   2,116 data   4,600 bss
+without  129,368        2,036        4,592
+face     + 5,824        +   80       +   8
+```
+
+**5,904 bytes of flash**, 2.40% of the 245,760 budget. **80 bytes of RAM** for
+`pet_state_t`, plus 8 for Movement's two per-face arrays. The single largest
+symbol is `pet_face_loop` at 1,952 bytes, which is not a big switch statement —
+every `_pet_*` helper is static with one call site, so GCC inlines the whole
+state machine into it. The fourteen frame tables are 1,812.
+
+**Battery is bounded by screen time, and that is the whole story.**
+`pet_face_resign` drops the tick to 1 Hz and turns tap detection off, and
+Movement's inactivity timeout returns to face 0 after 60 s by default. Off
+screen the face costs literally nothing; on screen it costs an 8 Hz tick against
+the clock face's 1 Hz, and the accelerometer at 400 Hz in low-noise mode against
+a background rate that is powered down by default. The accelerometer dominates
+by a wide margin.
+
+What is deliberately *not* in MANUAL.md §16 is a µA figure. Two attempts to pull
+the LIS2DW12 consumption table (ST and a Farnell mirror) both timed out, and a
+remembered number in a document that will be read by a grader is worse than an
+honest gap. §16 names the exact configuration to look up instead.
+
+### Reducing it
+
+Three changes, all measured rather than assumed:
+
+**A shadow framebuffer.** `_pet_draw` used to push all ten cells on every
+redraw. It now keeps what it last wrote and pushes only the differences, which
+matters because repainting one cell is up to sixteen SLCD register
+read-modify-writes. `redraw_cost.py` — a new tool, reusing `check_sounds.py`'s
+parser — replays every animation and counts:
+
+```
+143 frame transitions:  10 cells per redraw -> 1.05    (90% fewer)
+resting on happy:       35 cell repaints/s  -> 0, plus 3 colon flips/s
+```
+
+Zero, resting, because the blink is carried by the colon, which is a flag rather
+than a cell. Resting is where the face spends most of its screen time, so that
+is the number that counts. `_pet_invalidate` marks the shadow stale on activate
+and on a low-energy update — Movement clears the display on a face switch, and a
+shadow describing a screen that no longer exists is worse than no shadow.
+
+**The accelerometer off while dead.** A dead pet turns every shake away in
+`_pet_blocked`, so running the accelerometer at 400 Hz for it buys nothing.
+`_pet_set_tap_detection` only touches the hardware when the answer changes, and
+`_pet_rest` is on every route into and out of death, including the showcase's
+mood step.
+
+**The label fallback removed.** Each row of `_pet_anims` carried a `const char
+*label` and a six-character string, drawn if an animation had no frames — a
+fallback its own comment admitted could never fire in a finished build, at a
+cost of about 200 bytes. Replaced by a `check_sounds.py` assertion that every
+animation except `PET_ANIM_NONE` has a frame table: the same guarantee, moved
+from runtime to build time, for no flash at all.
+
+Adding that assertion turned up two parser gaps that had been there since the
+tool was written. `read_anims` matched the array's own `[PET_ANIM_COUNT]`
+dimension as though it were a row, and `read_frames` required the `hold` field
+to be a decimal literal — so `_pet_frames_pile` and `_pet_frames_puddle`, whose
+single pose holds for `PET_ANIM_HZ`, parsed as having no frames and were never
+checked at all. Both fixed. A harness that quietly skips what it cannot parse is
+the same failure as a cue that never fires.
+
+Net: flash 137,396 -> 137,308, RAM 68 -> 80 bytes (the shadow). The flash saving
+is small because there is not much fat; the display saving is not.

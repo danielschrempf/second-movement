@@ -89,7 +89,7 @@ explicitly, as in the command above.
 **3. Flash budget.** Usable flash is `0x40000 - 0x2000 (bootloader) - 0x2000
 (eeprom)` = **245,760 bytes**. Too many faces in `movement_config.h` is a
 compile error, not a runtime surprise. Current build on the PC (GCC 14.2):
-135,272 text + 2,124 data = 137,396 (56%, ~106 KB free). RAM is 32 KB.
+135,192 text + 2,116 data = 137,308 (56%, ~106 KB free). RAM is 32 KB.
 
 Expect the two machines to report *different* sizes — the ARM GCC versions
 differ. GCC 15.3 also emits warning classes the PC's older GCC doesn't (e.g.

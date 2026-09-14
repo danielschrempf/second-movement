@@ -88,11 +88,24 @@ cc -O2 -o check_layers check_layers.c && ./check_layers
 | `check_layers.c` | The cells drawn from state — the buff sign and the food pips — are off limits to every layer, the two layers overlap only in cell 9 where that is intended, and a rogue frame gets clipped | The region map or `_pet_layers` changes |
 | `check_awake_time.c` | The waking-seconds accounting is monotonic and additive, and handles spans over whole nights and both day boundaries. Also prints how long neglect takes to kill the pet | `PET_HOUR_WAKE` / `PET_HOUR_SLEEP` or the decay rate change |
 | `check_balance.c` | Simulates a week of care at different check-in rates and feed timings, printing the mood trajectory | Any tunable in the buff/debuff block changes |
-| `check_sounds.py` | Every sound cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, and no sound is left unreachable | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_sounds.py` | Every sound cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is left unreachable, and every animation has a frame table | **Any animation is redrawn**, or a cue or sound is edited |
 
 `check_layers.c` and `check_awake_time.c` copy their constants from the
 firmware. They are **not** wired to it, so a tunable changed in `pet_face.h` will
 not fail these until it is changed here too — check both if a number moves.
+
+## Measuring — `redraw_cost.py`
+
+Not a check; it prints numbers. `_pet_draw` keeps a shadow of what it last wrote
+to the LCD and pushes only the cells that changed, and this says what that is
+worth by replaying every animation and counting.
+
+```sh
+python3 redraw_cost.py            # defaults to ../../watch-faces/complication/pet_face.c
+```
+
+The output backs the figures in [MANUAL.md](../MANUAL.md) §16. Re-run it when
+the art changes or the compositor does, and update §16 if the numbers move.
 
 `check_sounds.py` is the exception: it parses `pet_face.c` directly, so it cannot
 go stale.
