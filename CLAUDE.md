@@ -25,9 +25,14 @@ Animations are drawn as segment art on an F-91W template and exported as GIFs
 into [_cs50ref/FaceAnimations](_cs50ref/FaceAnimations). They are not
 transcribed by hand — `_cs50ref/tools/decode.sh` converts one into a paste-ready
 `pet_frame_t` table, and `--check` reports any frame that lights half of a tied
-segment pair (so can't render as drawn) along with the cells the art touches. That directory also
-holds the harnesses for the layer regions, the waking-time maths and the balance
-simulation; [its README](_cs50ref/tools/README.md) says when to re-run each.
+segment pair (so can't render as drawn) along with the cells the art touches.
+The GIFs are **reference, not source**: the tables in `pet_face.c` are the art,
+and some have been hand-edited since their export, so re-running `decode.sh` on
+an old GIF can silently undo a later change. Read the diff before pasting.
+
+That directory also holds the harnesses for the layer regions, the waking-time
+maths and the balance simulation; [its README](_cs50ref/tools/README.md) says
+when to re-run each.
 
 Development happens on two machines — a Windows 11 PC (primary) and a Mac.
 

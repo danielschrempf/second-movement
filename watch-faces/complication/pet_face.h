@@ -47,11 +47,12 @@
  *   Shake         Play (accelerometer; simulator: Alarm long while alive)
  *                 Each shake climbs a rung; the pet is deaf between them
  *   Mode          reserved by Movement — next face
- *   Light  1.5 s  Showcase: hold the next animation on screen (PET_SHOWCASE)
+ *   Light  1.5 s  Showcase: start the reel of every animation, or cancel it
+ *                 (PET_SHOWCASE)
  *   Alarm  1.5 s  Showcase: push the mood up one tic
  *
- * The showcase holds fire their 0.5 s action on the way past, so stepping an
- * animation also hugs the pet.
+ * The showcase holds fire their 0.5 s action on the way past, so starting the
+ * reel also hugs the pet.
  *
  * The pet sleeps 21:00-06:00. Nothing decays while it does; disturbing it costs
  * tics and earns no buff. Nothing runs while you are on another face; time is
@@ -175,25 +176,38 @@
 #define PET_BUFF_POSITION           0   // plus / minus sign
 #define PET_FOOD_POSITION           3   // the four pips
 
-// Showcase: a gallery of the pet's animations and moods.
+// Showcase: a reel of the pet's animations and moods.
 //
 // Most of what the pet can do is gated behind real time -- angry takes most of a
 // day of neglect, dead a day and a half, snoring waits until 21:00 -- so a
 // wearer could own this face for a week without seeing half its art. These two
-// holds walk the whole set on demand.
+// holds show the whole set on demand.
 //
-//   LIGHT held 1.5 s   hold the next animation on screen; walks the whole list
-//                      and then hands the screen back to the live pet
+//   LIGHT held 1.5 s   start the reel, or cancel one already running
 //   ALARM held 1.5 s   push the mood up one tic, wrapping past dead back to zero
 //
-// Held animations stay put rather than flashing past once, so a one-shot can be
-// looked at for as long as you like. Both holds fire their 0.5 s long-press on
-// the way past, since Movement delivers that first: LIGHT spends a hug, ALARM
-// resurrects a dead pet and otherwise does nothing.
+// The reel plays the animations back to back in a fixed order -- a life story,
+// starting from the grave -- each one PET_SHOWCASE_PLAYS times before the next
+// begins, and round again from the top. One-shots are looped along with the
+// rest, so nothing flashes past once.
 //
-// Set to 0 to drop the gallery and its code, leaving the buttons to play the
-// game and nothing else.
+// A lap is 59.5 s, which is sized against Movement's shortest inactivity timeout
+// of 60 s: left alone, the reel plays the whole set through once and the face
+// then bows out to the clock a moment into the second lap. Nothing here enforces
+// that -- the reel simply loops, and the ordinary timeout ends it -- so a watch
+// set to a longer timeout gets more laps rather than a truncated one.
+//
+// The hold cancels it early. So does anything you actually do to the pet -- feed,
+// sweep, shake -- and so does a mood step.
+//
+// Both holds fire their 0.5 s long-press on the way past, since Movement
+// delivers that first: LIGHT spends a hug, ALARM resurrects a dead pet and
+// otherwise does nothing.
+//
+// Set to 0 to drop the reel and its code, leaving the buttons to play the game
+// and nothing else.
 #define PET_SHOWCASE          1
+#define PET_SHOWCASE_PLAYS    2         // passes of each animation before the next
 
 // ---- Frames -----------------------------------------------------------------
 
@@ -472,8 +486,13 @@ typedef struct {
     uint8_t  shadow[10];
     uint8_t  shadow_flags;
     bool     shadow_stale;
-    bool     showcase_on;       // PET_SHOWCASE: an animation is held on screen
-    uint8_t  showcase_anim;     // ... and which one, so stepping walks the list
+    bool     showcase_on;       // PET_SHOWCASE: the reel owns the screen
+    uint8_t  showcase_step;     // ... which entry of the reel it is on
+    uint8_t  showcase_plays;    // ... and how many passes of it have gone by
+    // The 0.5 s press on the way to the 1.5 s hold takes the screen back, so by
+    // the time the hold arrives showcase_on can no longer say whether the reel
+    // was running. This remembers, and is what the hold toggles against.
+    bool     showcase_interrupted;
 } pet_state_t;
 
 void pet_face_setup(uint8_t watch_face_index, void ** context_ptr);

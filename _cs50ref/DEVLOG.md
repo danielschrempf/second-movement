@@ -1618,3 +1618,137 @@ of the strictness was protecting anybody.
 What survives is the plain statement at the top of `pet_face.c`: the art is the
 classic panel's geometry, the face runs anywhere, and on the custom LCD it will
 not read as intended.
+
+
+---
+
+## Session 19 — the showcase becomes a reel
+
+The showcase was a stepper: hold `LIGHT` for 1.5 s, get the next animation, hold
+again for the one after. Sixteen holds to see sixteen animations, and each one
+spent a hug on the way past — so a full walk exhausted the four-a-day cap by the
+fourth press and the rest were silent no-ops.
+
+It is now a reel. One hold starts it, another cancels it, and in between the
+animations butt up against each other in a fixed order, twice each:
+
+> resurrect, snore, wake, eat, kiss, play small, play big, barf, poo, happy,
+> confused, upset, angry
+
+The order is a life, which is the only ordering that made the sequence read as
+something rather than as a list: the climb out of the grave, a night's sleep and
+the morning after, the things you do to the pet, what comes back out of it, and
+the four moods last — those being the ones a wearer sees anyway, so the ones to
+lose least by missing if you cancel early.
+
+**Three of the seventeen animations are not entries, and each omission is an
+improvement.** All three are single static poses that another entry already
+contains, frame for frame:
+
+- `PET_ANIM_PILE` and `PET_ANIM_PUDDLE` are the last frames of `poo` and `barf`.
+  As entries they would have been two still frames of the floor; where they are,
+  they are the thing the pet just made.
+- `PET_ANIM_DEAD` is frame 0 of `PET_ANIM_RESURRECT` — identical, segment for
+  segment, which only turned up on going to check. So the reel still opens on the
+  tombstone and then sinks it down the screen, and `dead` as an entry of its own
+  was a second of a still image standing in front of the same image moving.
+
+Dropping the two floor states also removed the whole status-layer half of the old
+exit problem: every entry is now a character-layer animation.
+
+**A pass is only countable at one instant.** An animation "ends" when the frame
+index runs off the table, and for a looping one that instant exists *only*
+because the showcase forces it to loop. So the counter lives in `_pet_layer_tick`
+at exactly that point, and nowhere else would have worked: there is no
+end-of-animation callback, and timing the entries would have re-introduced the
+drift the cue system was built to remove. Count the pass where the loop turns
+over, advance at `PET_SHOWCASE_PLAYS`.
+
+**Toggling needed a third piece of state.** The 0.5 s long press arrives on the
+way to every 1.5 s hold, and it hands the screen back so the hug can show its
+kiss — so by the time the hold lands, `showcase_on` is already false and has no
+memory of what it was. A toggle cannot be written against it. `showcase_exit` now
+takes a `remember` flag that sets `showcase_interrupted` when it took the screen
+from a running reel, and the hold toggles against *that*.
+
+Clearing that note wanted care. The obvious place is the release, and it is
+wrong: Movement drains a batch of pending events in enum order, and
+`EVENT_LIGHT_LONG_UP` sorts before `EVENT_LIGHT_REALLY_LONG_PRESS`, so a release
+landing in the same batch as the 1.5 s timeout wipes the note a moment before the
+hold reads it — and the button starts a reel where it meant to cancel one. It is
+cleared on `EVENT_LIGHT_BUTTON_DOWN` instead, which sorts first and always begins
+the press, so the note cannot escape the press it was left in.
+
+This is the same shape as the bug in Session 14, one level up: the state that
+says "is it on screen" and the state that says "where are we" have to be separate
+fields, because the button sequence clears the first on its way to reading the
+second.
+
+**The lap is sized against the inactivity timeout rather than fighting it.**
+`check_showcase.py` was made to print the lap total, and the first version came
+out at 60.5 s against a default timeout
+(`movement_timeout_inactivity_deadlines[0]`) of 60 — so the face would have
+resigned half a second before the reel finished its one and only lap, looking for
+all the world like a deliberate design.
+
+The first fix was to ignore `EVENT_TIMEOUT` while the reel was up, which works:
+Movement arms that timeout once per spell of activity, so ignoring it holds the
+face until the cancelling press arms it again. The better fix was to take `dead`
+out. That is 1 s off the lap, leaving **59.5 s** against a 60 s timeout anchored
+on the button release that started the reel — so the reel plays the whole set
+through once and the face bows out a fraction of a second into the second lap,
+with the special case deleted and `EVENT_TIMEOUT` handled exactly as it always
+was.
+
+Sizing the content to the constraint beat overriding the constraint, and the
+entry it cost was the one entry worth losing. A longer timeout setting now gets
+more laps rather than a truncated one, which is the right way round for something
+the wearer chose.
+
+**The reel resets `breath`.** Only the first `PET_SNORE_AUDIBLE_BREATHS` breaths
+of a sleep are voiced, and that counter belongs to the live pet's night. A pet
+that had been snoring since 21:00 would have reached the reel already hoarse and
+shown its sleep silently. Two audible breaths and two passes is not a
+coincidence: `PET_SNORE_AUDIBLE_BREATHS` is 2, so a reset makes both passes of
+`snore` sound.
+
+`check_showcase.py` grew a second half to match. It still proves you can always
+get back to the live pet — now from every one of the thirteen positions and by
+five routes out, the new cancel included, 520 combinations — and it now also
+proves the reel visits every entry in order for its allotted passes and wraps at
+the end. That second assertion is what would catch an entry whose art never
+reaches the end of its table: the reel would stop there for ever, and nothing
+else would say so.
+
+The whole change costs **152 bytes** of flash and **4 bytes** of RAM (PC, GCC
+14.2: 135,336 → 135,488 text, `sizeof(pet_state_t)` 84 → 88), which is the
+thirteen-byte running order plus the advance.
+
+No entry gets a minimum dwell, and none needs one now that `dead` is out. A floor
+on time would have been a second rule about timing inside a feature whose whole
+premise is that the art decides how long it takes, and the only entry short
+enough to want one was the one with nothing to animate.
+
+### The wake animation's missing segment
+
+Dan added `SEG_F` to cell 7 in two frames of `_pet_frames_wake`, having noticed
+what looked like a gap left for it — `SEG_E    ` with trailing space, as if
+something had been read and then dropped.
+
+Nothing was dropped. `decode.py` prints each cell with `"%-9s"`, a flat
+nine-character column, and `SEG_E` padded to nine looks exactly like room for
+`|SEG_F`. Re-running `decode.sh` on `CasioPet_Animations-Wake.gif` reproduces
+`SEG_E` alone, so the decoder read the art correctly and the art has one segment
+there.
+
+So it is a change to the art rather than a repair of a transcription, and it
+stands: cell 7 has no tied pair, so `E` alone and `E|F` are both renderable, the
+`wake` cue watches cell 7's `A|B|C|D` and is unmoved by either, and
+`check_sounds.py` passes.
+
+**Which settles what the GIFs are for.** They are reference, not source. The
+table in `pet_face.c` is the art now, and `CasioPet_Animations-Wake.gif` is
+behind it by one segment — deliberately, not by accident. `decode.sh` stays
+exactly as useful for what it was built for, which is getting a drawing into the
+file without transcribing it by hand; what changed is that re-running it on an
+old export is no longer assumed to be safe. Check the diff before pasting.

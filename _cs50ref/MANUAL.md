@@ -63,7 +63,7 @@ Long press is 0.5 s; the showcase holds in §10 are 1.5 s.
 | `ALARM` hold | Resurrect | Only while dead |
 | Shake | Play | Accelerometer tap detection. Each shake climbs a rung; 3 s deaf, then 5 s to shake again |
 | `MODE` | Leave | Movement's default — next face |
-| `LIGHT`/`ALARM` hold 1.5 s | Showcase | Walk the animations, or step the mood. `LIGHT` spends a hug getting there — see §10 |
+| `LIGHT`/`ALARM` hold 1.5 s | Showcase | Start or cancel the animation reel, or step the mood. `LIGHT` spends a hug getting there — see §10 |
 
 In the simulator, which has no accelerometer, `ALARM` hold stands in for a shake
 while the pet is alive.
@@ -356,61 +356,108 @@ wearer could reach would shut it up.
 ## 10. Showcase
 
 Most of the pet's animations are gated behind the clock: angry takes most of a
-day of neglect, dead a day and a half, snoring waits for 21:00. Two controls walk
+day of neglect, dead a day and a half, snoring waits for 21:00. Two controls show
 the whole set on demand.
 
 | Press | Does |
 | --- | --- |
-| `LIGHT` hold 1.5 s | Hold the next animation on screen. Repeat to walk all sixteen — the fourteen drawn animations plus the two floor states — and hand the screen back to the live pet |
+| `LIGHT` hold 1.5 s | Start the reel, or cancel the one that is running |
 | `ALARM` hold 1.5 s | Push the mood up one tic, wrapping past dead back to blissful |
 
-Held animations stay put rather than flashing past once, so one-shots can be
-looked at for as long as you like. Stepping the mood is the fast way to see all
-five expressions in order, death and resurrection included.
+The reel plays the animations back to back, twice each, in one fixed order:
 
-A held one-shot never ends, so `_pet_anim_busy` stays true and the scene timers
-that wait on it — feeding and the play ladder — pause for as long as the showcase
-is up. That is left as it is: a queued meal already sits through a 3 s settle
-before the pet starts eating, so waiting out a browse is the same kind of pause,
+> resurrect, snore, wake, eat, kiss, play small, play big, barf, poo, happy,
+> confused, upset, angry
+
+It reads as a life — the climb out of the grave, a night's sleep and the morning
+after, the things you do to the pet, what comes back out of it, and the four
+moods last, those being the ones a wearer sees anyway. **A lap is 59.5 s**, and
+at the end it starts again from the top.
+
+**Three of the seventeen animations are not entries, and nothing is lost by it.**
+Each is a single static pose that another entry already contains:
+
+| Left out | Because |
+| --- | --- |
+| `dead` | The tombstone is frame 0 of `resurrect`, segment for segment. The reel still opens on the grave and then sinks it down the screen; as an entry of its own it was one second of a still image |
+| `pile` | The last frame of `poo` |
+| `puddle` | The last frame of `barf` |
+
+So the reel shows all three where they belong — in the moment they are made, or
+in the moment they are left behind — rather than as three more still frames.
+
+One-shots are looped along with everything else rather than flashing past once,
+which is what makes two passes enough to read them. Entries run 4–8 s each.
+Stepping the mood is still the fast way to see the five expressions on the live
+pet, death and resurrection included.
+
+While the reel is up, a forced loop means `_pet_anim_busy` stays true, so the
+scene timers that wait on it — feeding and the play ladder — pause for as long as
+it runs. That is left as it is: a queued meal already sits through a 3 s settle
+before the pet starts eating, so waiting out a reel is the same kind of pause,
 and it resumes untouched the moment the screen is handed back. Nothing is lost
 and nothing is charged.
 
-Where the walk has got to is kept in `showcase_anim`, separately from "an
-animation is currently held" (`showcase_on`). It has to be: the 0.5 s long press
-arrives on the way to every 1.5 s hold, and it hands the screen back so the hug
-can show its kiss — so by the time the hold lands, nothing is held. An earlier
-build read the cursor off `showcase_on`, which meant every hold restarted at
-`HAPPY`; with the pet usually happy already, the control looked completely dead.
+**The inactivity timeout is what ends a reel nobody cancels.** A lap is 59.5 s
+and Movement's shortest timeout is 60 s (`to_interval`, the default), anchored on
+the button release that started the reel — so the reel plays the whole set
+through once, and the face bows out to the clock a fraction of a second into the
+second lap.
+
+Nothing in the face enforces that. The reel simply loops, `EVENT_TIMEOUT` is
+handled exactly as it always was, and the two numbers were chosen to meet. A
+watch set to a longer timeout gets more laps rather than a truncated one, which
+is the right way round for a setting the wearer chose. An earlier version held
+the timeout off so the reel ran until cancelled; sizing the lap under the timeout
+does the same job and deletes the special case.
+
+Which entry the reel is on is kept in `showcase_step`, and how many passes of it
+have gone by in `showcase_plays`. The pass is counted at the one moment an
+animation ends — which, for a loop, only exists because the showcase forces it.
+
+A third field, `showcase_interrupted`, is what the `LIGHT` hold toggles against.
+It has to be: the 0.5 s long press arrives on the way to every 1.5 s hold, and it
+hands the screen back so the hug can show its kiss — so by the time the hold
+lands, `showcase_on` is already false and cannot say whether the reel was
+running. `showcase_interrupted` remembers that the screen was taken from a
+running reel, so the hold behind it cancels rather than starting over.
+
+It is cleared on `EVENT_LIGHT_BUTTON_DOWN` rather than on the release, which is
+what makes it airtight. Movement drains a batch of pending events in enum order,
+and `EVENT_LIGHT_LONG_UP` sorts *before* `EVENT_LIGHT_REALLY_LONG_PRESS` — so a
+release landing in the same batch as the 1.5 s timeout would wipe the note a
+moment before the hold read it, and the button would start a reel where it meant
+to cancel one. `EVENT_LIGHT_BUTTON_DOWN` sorts first and always begins the press,
+so the note can only be set and read inside a single press.
 
 Leaving the showcase always goes through `_pet_showcase_exit`, which calls
 `_pet_rest`. Clearing `showcase_on` on its own is not enough: it only stops
 `_pet_layer_tick` forcing a one-shot to loop. A one-shot then ends and rests by
-itself, but a looping animation keeps looping, and the two floor states leave the
-character layer on `PET_ANIM_NONE`, which the tick skips entirely — so the
-showcased animation stayed up for good, and you could walk away from the showcase
-with a healthy pet stuck confused, snoring at noon, dead, or gone from the screen
-altogether behind a pile it never made. `check_showcase.py` asserts you can
-always get back.
+itself, but a looping animation keeps looping — so the animation on screen stayed
+up for good, and you could walk away from the showcase with a healthy pet stuck
+confused, snoring at noon, or dead. `check_showcase.py` asserts you can always
+get back, from every position in the reel and by every route out.
 
-A short press, a sweep or a shake clears the cursor as well, so leaving the
-showcase properly and coming back starts the walk over.
+A short press, a sweep or a shake cancels the reel too, and the next hold starts
+it again from the top.
 
-Both fire their 0.5 s long-press on the way past, since Movement delivers that
-first. The short actions do **not** fire — `EVENT_*_BUTTON_UP` only arrives on a
+Both holds fire their 0.5 s long-press on the way past, since Movement delivers
+that first. The short actions do **not** fire — `EVENT_*_BUTTON_UP` only arrives on a
 release under half a second — so nothing is fed and nothing is swept. What does
 happen:
 
-- **`LIGHT` spends a hug.** Each animation you step through costs one of the four
-  daily hugs and −0.25 tic. Walking the whole list exhausts the cap four presses
-  in; the rest are no-ops, so the pet ends up a tic healthier and out of hugs.
+- **`LIGHT` spends a hug.** Starting the reel costs one of the four daily hugs
+  and −0.25 tic, and so does cancelling it. Two hugs for a session, rather than
+  one per animation — the old step-by-step control exhausted the daily cap four
+  presses into a walk.
 - **`ALARM` does nothing** on hardware while the pet is alive. If it is dead, the
   0.5 s press resurrects it before you reach the mood step. In the simulator,
   which stands in for the accelerometer here, it plays with the pet instead.
 
 The hug is left in deliberately rather than refunded on escalation. It is a
 fair trade — a pet you stop to admire gets a cuddle out of it — and the only
-consequence is that a showcase session spends that day's hugs on a pet you are
-also raising.
+consequence is that a showcase session spends two of that day's hugs on a pet
+you are also raising.
 
 Set `PET_SHOWCASE` to `0` in `pet_face.h` for a build where the buttons only play
 the game.
@@ -668,13 +715,15 @@ Where it goes:
 | The nine cue tables | 65 |
 | Everything else (cue engine, waking-time maths, layer engine) | ~1,198 |
 
-Two later passes account for 328 of that. Filling in every silent action — the
-nine sounds the first pass left out — cost **200 bytes**, and the three sittings
-with their overfeed barf another **128**. Neither was worth economising on.
+Three later passes account for 488 of that. Filling in every silent action — the
+nine sounds the first pass left out — cost **200 bytes**, the three sittings with
+their overfeed barf another **128**, and turning the showcase from a stepper into
+the reel in §10 a further **152** (measured on the PC, GCC 14.2: 135,336 → 135,488
+text, `data` and `bss` unmoved). None was worth economising on.
 
-**92 bytes of RAM.** `sizeof(pet_state_t)` is 84, `malloc`ed once in
+**96 bytes of RAM.** `sizeof(pet_state_t)` is 88, `malloc`ed once in
 `pet_face_setup` and never freed; Movement's `watch_face_contexts` and
-`scheduled_tasks` arrays each grow by one entry. That is 0.28% of the 32 KB.
+`scheduled_tasks` arrays each grow by one entry. That is 0.29% of the 32 KB.
 
 ### Battery
 
@@ -684,6 +733,7 @@ back to 1 Hz and turns tap detection off, and Movement's inactivity timeout
 extra cost is bounded by *how long the pet is on screen* — a handful of minutes
 a day — and is exactly zero the rest of the time. The pet never reaches
 low-energy mode, because it resigns long before the LE interval.
+
 
 While it *is* on screen, against the stock clock face:
 

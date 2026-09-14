@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
-"""Proves you can always get back to the live pet.
+"""Proves the reel plays in order, and that you can always get back to the pet.
 
-The showcase holds an animation on screen by forcing it to loop. Leaving it is
-the interesting half: clearing `showcase_on` only stops that forcing, so a
-one-shot ends and reaches `_pet_rest` on its own -- but a looping animation
-keeps looping, and a status animation leaves the character layer on
-PET_ANIM_NONE, which `_pet_layer_tick` skips entirely. Neither reaches
-`_pet_rest`, and the showcased animation stays up for good.
+The showcase is a reel: it holds each animation on screen by forcing it to loop,
+counts the passes, and moves to the next entry after PET_SHOWCASE_PLAYS of them.
+Two things can go wrong, and neither goes wrong loudly.
 
-So this replays the layer engine and asserts one invariant: from every position
-in the walk, leaving the showcase by every route ends with the pet back on
-screen showing its real mood, and nothing on the floor it did not put there.
+Leaving is the first. Clearing `showcase_on` only stops that forcing, so a
+one-shot ends and reaches `_pet_rest` on its own -- but a looping animation keeps
+looping, and a status animation leaves the character layer on PET_ANIM_NONE,
+which `_pet_layer_tick` skips entirely. Neither reaches `_pet_rest`, and the
+animation on screen stays up for good.
 
-The animation table is parsed out of pet_face.c, so the art cannot go stale,
-and so is the one thing under test: whether leaving the showcase hands the
-screen back (`read_exit_rests`). The rest of the engine below -- `_pet_layer_tick`,
-`_pet_rest` -- is a transcription and IS a copy. If those change, change them
-here too.
+Advancing is the second. The pass is counted at the one moment an animation ends,
+which for a loop only exists because the showcase forces it -- so an entry whose
+art never reaches that point would hold the reel there for ever.
+
+So this replays the layer engine and asserts both: the reel visits every entry in
+order, each for exactly its allotted passes, and from every position in it,
+leaving by every route ends with the pet back on screen showing its real mood and
+nothing on the floor it did not put there.
+
+The animation table and the reel are parsed out of pet_face.c, so the art cannot
+go stale, and so is the one behaviour under test: whether leaving hands the
+screen back (`read_exit_rests`). The rest of the engine below --
+`_pet_layer_tick`, `_pet_rest` -- is a transcription and IS a copy. If those
+change, change them here too.
 
     python3 check_showcase.py
 """
@@ -28,12 +36,7 @@ import check_sounds
 
 HZ = 8
 CHARACTER, STATUS = 0, 1
-
-# The walk order is the enum order in pet_face.h.
-ORDER = ["NONE", "HAPPY", "CONFUSED", "UPSET", "ANGRY", "DEAD", "RESURRECT",
-         "POO", "PLAY_SMALL", "PLAY_BIG", "BARF", "EAT", "KISS", "SNORE",
-         "WAKE", "PILE", "PUDDLE"]
-INDEX = {name: i for i, name in enumerate(ORDER)}
+PLAYS = 2                       # PET_SHOWCASE_PLAYS
 
 MOODS = ("HAPPY", "CONFUSED", "UPSET", "ANGRY", "DEAD")
 
@@ -53,6 +56,22 @@ def read_exit_rests(src):
         return False
     helper = re.search(r"static void _pet_showcase_exit\(.*?\n\}", src, re.S)
     return bool(helper) and "_pet_rest" in helper.group(0)
+
+
+def read_reel(src):
+    """The running order, out of _pet_showcase_reel."""
+    table = src[src.index("static const uint8_t _pet_showcase_reel"):]
+    return re.findall(r"PET_ANIM_(\w+)", table[:table.index("};")])
+
+
+def read_plays(src):
+    """PET_SHOWCASE_PLAYS, out of pet_face.h."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "..", "..", "watch-faces", "complication",
+                        "pet_face.h")
+    m = re.search(r"#define\s+PET_SHOWCASE_PLAYS\s+(\d+)",
+                  open(path, encoding="utf-8").read())
+    return int(m.group(1)) if m else PLAYS
 
 
 def read_anims(src):
@@ -77,16 +96,19 @@ def read_anims(src):
 class Pet:
     """_pet_layer_tick, _pet_rest and the showcase, transcribed."""
 
-    def __init__(self, anims, mood, scene, has_poo=False, has_barf=False,
-                 exit_rests=True):
-        self.anims = anims
+    def __init__(self, anims, reel, plays, mood, scene, has_poo=False,
+                 has_barf=False, exit_rests=True):
+        self.anims, self.reel, self.plays = anims, reel, plays
         self.exit_rests = exit_rests
         self.layer = [{"anim": "NONE", "idle": "NONE", "frame": 0, "hold": 0}
                       for _ in range(2)]
         self.mood, self.scene = mood, scene
         self.has_poo, self.has_barf, self.poo_pending = has_poo, has_barf, False
-        self.showcase_on, self.showcase_anim = False, "NONE"
+        self.showcase_on = False
+        self.showcase_step, self.showcase_plays = 0, 0
+        self.showcase_interrupted = False
         self.queue = []
+        self.seen = []          # every entry the reel actually started, in order
 
     # -- playback ---------------------------------------------------------
     def hold_of(self, anim, frame):
@@ -133,7 +155,8 @@ class Pet:
         count = len(anim["frames"]) if anim["frames"] else 1
         loop_here = anim["loop"]
         queued = layer == CHARACTER and bool(self.queue)
-        if self.showcase_on:
+        reeling = self.showcase_on and layer == CHARACTER
+        if reeling:
             loop_here, queued = True, False
         if L["hold"] > 1:
             L["hold"] -= 1
@@ -142,6 +165,11 @@ class Pet:
         if L["frame"] < count:
             L["hold"] = self.hold_of(L["anim"], L["frame"])
             return
+        if reeling:
+            self.showcase_plays += 1
+            if self.showcase_plays >= self.plays:
+                self.showcase_advance()
+                return
         if loop_here and not queued:
             L["frame"] = 0
             L["hold"] = self.hold_of(L["anim"], 0)
@@ -162,29 +190,37 @@ class Pet:
     def blocked(self):
         return self.scene in ("DEAD", "ASLEEP", "NIGHT_AWAKE")
 
-    def showcase_next(self):
-        nxt = INDEX[self.showcase_anim] + 1 if self.showcase_anim != "NONE" else INDEX["HAPPY"]
-        if nxt >= len(ORDER):
-            self.showcase_on, self.showcase_anim = False, "NONE"
-            self.rest()
-            return
-        self.showcase_on, self.showcase_anim = True, ORDER[nxt]
+    def showcase_play(self):
+        self.showcase_on, self.showcase_plays = True, 0
         self.queue = []
         self.layer_play(CHARACTER, "NONE")
         self.layer_play(STATUS, "NONE")
-        self.start_anim(ORDER[nxt])
+        self.start_anim(self.reel[self.showcase_step])
+        self.seen.append(self.reel[self.showcase_step])
 
-    def showcase_exit(self, keep_cursor):
+    def showcase_advance(self):
+        self.showcase_step = (self.showcase_step + 1) % len(self.reel)
+        self.showcase_play()
+
+    def showcase_exit(self, remember):
         had_screen = self.showcase_on
         self.showcase_on = False
-        if not keep_cursor:
-            self.showcase_anim = "NONE"
+        self.showcase_interrupted = remember and had_screen
         if had_screen and self.exit_rests:
             self.rest()
 
+    def showcase_toggle(self):
+        if self.showcase_interrupted:
+            self.showcase_interrupted = False
+            return
+        self.showcase_step = 0
+        self.showcase_play()
+
     def escape(self, how):
         """The escape switch at the top of pet_face_loop, then the action."""
-        self.showcase_exit(keep_cursor=how.endswith("hold"))
+        # Every route past 0.5 s hands the screen back first; only LIGHT's
+        # remembers, because only LIGHT's has a toggle behind it.
+        self.showcase_exit(remember=(how == "light_cancel"))
         if how == "light_tap" and not self.blocked():          # feed
             self.scene = "FEEDING"
         elif how == "alarm_tap" and self.scene != "DEAD":      # sweep
@@ -192,13 +228,55 @@ class Pet:
             self.set_status()
         elif how == "light_hold" and not self.blocked():       # hug
             self.start_anim("KISS")
+        elif how == "light_cancel":                            # hug, then cancel
+            if not self.blocked():
+                self.start_anim("KISS")
+            self.showcase_toggle()
         # alarm_hold on a live pet does nothing on its own
 
 
-ESCAPES = ("light_tap", "alarm_tap", "light_hold", "alarm_hold")
+# light_cancel is the 1.5 s hold: the hug at 0.5 s, then the toggle behind it.
+ESCAPES = ("light_cancel", "light_tap", "alarm_tap", "light_hold", "alarm_hold")
 STARTS = [("HAPPY", "IDLE"), ("CONFUSED", "IDLE"), ("ANGRY", "IDLE"),
           ("DEAD", "DEAD"), ("HAPPY", "ASLEEP"), ("HAPPY", "NIGHT_AWAKE"),
           ("UPSET", "FEEDING"), ("HAPPY", "PLAYING")]
+
+
+def check_running_order(anims, reel, plays):
+    """The reel visits every entry in order, and holds none of them for ever."""
+    pet = Pet(anims, reel, plays, "HAPPY", "IDLE")
+    pet.showcase_toggle()
+    ticks, wanted = 0, len(reel) * 2 + 1      # two laps, to prove it wraps
+    limit = 200 * HZ
+    while len(pet.seen) < wanted and ticks < limit:
+        pet.tick()
+        ticks += 1
+    print("running order (%d entries, %d passes each):" % (len(reel), plays))
+    problems = []
+    if len(pet.seen) < wanted:
+        stuck = pet.seen[-1] if pet.seen else "nothing"
+        problems.append("the reel stopped advancing at %s" % stuck)
+    else:
+        for i, name in enumerate(pet.seen[:wanted]):
+            want = reel[i % len(reel)]
+            if name != want:
+                problems.append("entry %d played %s, expected %s"
+                                % (i, name, want))
+    for name in reel:
+        art = anims[name]["frames"]
+        span = sum(h for _, h in art) if art else HZ
+        print("  %-12s %2d poses  %4.1f s  x%d = %4.1f s%s"
+              % (name.lower(), len(art) if art else 1, span / HZ, plays,
+                 span * plays / HZ,
+                 "" if anims[name]["layer"] == CHARACTER else "   !! not on the character layer"))
+        if anims[name]["layer"] != CHARACTER:
+            problems.append("%s is not a character-layer animation" % name)
+    lap = sum((sum(h for _, h in anims[n]["frames"]) if anims[n]["frames"] else HZ)
+              for n in reel) * plays / HZ
+    print("  one lap: %.1f s" % lap)
+    for why in problems:
+        print("  !! %s" % why)
+    return problems
 
 
 def main():
@@ -207,25 +285,34 @@ def main():
         here, "..", "..", "watch-faces", "complication", "pet_face.c")
     src = open(path, encoding="utf-8").read()
     anims = read_anims(src)
+    reel = read_reel(src)
+    plays = read_plays(src)
     exit_rests = read_exit_rests(src)
     print("leaving the showcase rests: %s\n" % ("yes" if exit_rests else "NO"))
 
-    missing = [a for a in ORDER if a not in anims]
+    missing = [a for a in reel if a not in anims]
     if missing:
         print("!! not in _pet_anims: %s" % ", ".join(missing))
         return 1
 
+    problems = check_running_order(anims, reel, plays)
+    print()
+
     failures = []
     checked = 0
     for mood, scene in STARTS:
-        for steps in range(1, len(ORDER)):
+        for steps in range(len(reel)):
             for how in ESCAPES:
-                pet = Pet(anims, mood, scene, exit_rests=exit_rests)
-                for _ in range(steps):
-                    pet.showcase_next()
-                    for _ in range(4):
-                        pet.tick()
-                held = pet.showcase_anim
+                pet = Pet(anims, reel, plays, mood, scene, exit_rests=exit_rests)
+                pet.showcase_toggle()
+                # Run the reel forward to the entry under test.
+                for _ in range(20 * HZ * 60):
+                    if pet.showcase_step == steps:
+                        break
+                    pet.tick()
+                for _ in range(4):          # and a moment into it
+                    pet.tick()
+                held = reel[pet.showcase_step]
                 pet.escape(how)
                 for _ in range(600):        # 75 s with no further input
                     pet.tick()
@@ -234,7 +321,9 @@ def main():
                 character = pet.layer[CHARACTER]["anim"]
                 status = pet.layer[STATUS]["anim"]
                 why = None
-                if character == "NONE":
+                if pet.showcase_on:
+                    why = "still reeling"
+                elif character == "NONE":
                     why = "pet gone from the screen"
                 elif character in MOODS and character != pet.mood:
                     why = "stuck showing %s" % character
@@ -247,13 +336,14 @@ def main():
 
     width = max(len(f[2]) for f in failures) if failures else 10
     for mood, scene, held, how, why in failures:
-        print("  %-8s %-12s showcasing %-*s leave by %-11s -> %s"
+        print("  %-8s %-12s showing %-*s leave by %-12s -> %s"
               % (mood, scene, width, held, how, why))
 
-    print("\n%d showcase positions x escapes checked, %d stuck"
+    print("\n%d reel positions x escapes checked, %d stuck"
           % (checked, len(failures)))
-    print("all checks passed" if not failures else "FAILED")
-    return 1 if failures else 0
+    ok = not failures and not problems
+    print("all checks passed" if ok else "FAILED")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

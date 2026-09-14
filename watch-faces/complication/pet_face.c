@@ -245,13 +245,13 @@ static const pet_frame_t _pet_frames_wake[] = {
     { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
     { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, 0              ,  1 },
     { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  3 },
-    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_E    , SEG_NONE , SEG_NONE  }, 0              ,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_E|SEG_F, SEG_NONE , SEG_NONE  }, 0              ,  1 },
     { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
     { { SEG_NONE , SEG_D    , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
     { { SEG_NONE , SEG_D|SEG_G, SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
     { { SEG_NONE , SEG_G    , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
     { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_D|SEG_E|SEG_F, SEG_A|SEG_B|SEG_C|SEG_D, SEG_NONE , SEG_NONE  }, 0              ,  1 },
-    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_E    , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
+    { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_E|SEG_F, SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
     { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_E|SEG_G, SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  3 },
     { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_G    , SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
     { { SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_NONE , SEG_A|SEG_D|SEG_E|SEG_F, SEG_B|SEG_C, SEG_NONE , SEG_NONE , SEG_NONE  }, PET_FRAME_COLON,  1 },
@@ -736,6 +736,9 @@ static void _pet_invalidate(pet_state_t *s) {
 // pet rests. Other layers settle to their idle animation instead.
 
 static void _pet_rest(pet_state_t *s);
+#if PET_SHOWCASE
+static void _pet_showcase_advance(pet_state_t *s);
+#endif
 
 static uint8_t _pet_frame_hold(const pet_anim_t *a, uint8_t frame) {
     // Label-only animations show for one second.
@@ -852,8 +855,10 @@ static void _pet_layer_tick(pet_state_t *s, pet_layer_id_t l) {
     bool queued = (l == PET_LAYER_CHARACTER) && (s->queue_len > 0);
 
 #if PET_SHOWCASE
-    // The showcase loops whatever it is holding, one-shots included.
-    if (s->showcase_on) { loop_here = true; queued = false; }
+    // The reel holds the character layer: it loops whatever it is showing,
+    // one-shots included, and nothing queued behind it gets a turn.
+    bool reeling = s->showcase_on && l == PET_LAYER_CHARACTER;
+    if (reeling) { loop_here = true; queued = false; }
 #endif
 
     if (L->hold_left > 1) {
@@ -871,6 +876,15 @@ static void _pet_layer_tick(pet_state_t *s, pet_layer_id_t l) {
     }
 
     // The animation just ended.
+#if PET_SHOWCASE
+    // Which means the reel's current entry has finished a pass -- and this is
+    // the only place that can tell, since a looping animation never ends any
+    // other way. Enough of them and the next entry begins.
+    if (reeling && ++s->showcase_plays >= PET_SHOWCASE_PLAYS) {
+        _pet_showcase_advance(s);
+        return;
+    }
+#endif
     if (loop_here && !queued) {
         L->frame = 0;
         L->hold_left = _pet_frame_hold(a, 0);
@@ -962,51 +976,96 @@ static void _pet_rest(pet_state_t *s) {
 #if PET_SHOWCASE
 // -- Showcase -----------------------------------------------------------------
 //
-// The gallery: walk the animations and moods on demand rather than waiting for
+// The reel: play the animations back to back on demand rather than waiting for
 // the clock to produce them. Button map and rationale are next to PET_SHOWCASE.
 //
 // It borrows the live pet's screen, so the important part is giving it back --
 // every exit routes through _pet_showcase_exit, which rests the pet into its
 // real mood. See the note there.
 
-// Step to the next animation and hold it; walking off the end of the list hands
-// the screen back to the live pet. The cursor lives in showcase_anim rather than
-// showcase_on, which the 0.5 s long press has always already cleared by now.
-static void _pet_showcase_next(pet_state_t *s) {
-    pet_anim_id_t next = s->showcase_anim ? (pet_anim_id_t) (s->showcase_anim + 1)
-                                          : PET_ANIM_HAPPY;
-    if (next >= PET_ANIM_COUNT) {
-        s->showcase_on = false;
-        s->showcase_anim = PET_ANIM_NONE;   // the next hold starts the walk over
-        _pet_rest(s);
-        return;
-    }
+// The running order. It reads as a life: the climb out of the grave, a night's
+// sleep and the morning after, then the things you do to the pet, then what
+// comes back out of it, and the four moods last -- those are the ones a wearer
+// sees anyway, so they are the ones to lose least by missing.
+//
+// Three of the seventeen animations are not entries, and nothing is lost by it:
+//
+//   PET_ANIM_DEAD is the tombstone, one static pose -- and it is also frame 0 of
+//   PET_ANIM_RESURRECT, segment for segment, so the reel still opens on the
+//   grave and then sinks it down the screen. As an entry of its own it was one
+//   second of a still image.
+//
+//   PET_ANIM_PILE and PET_ANIM_PUDDLE are what the floor keeps, and each is the
+//   last frame of PET_ANIM_POO and PET_ANIM_BARF, so the reel shows them in the
+//   moment they are made rather than as two more still frames.
+//
+// What is left is thirteen character-layer animations and a lap of 59.5 s.
+static const uint8_t _pet_showcase_reel[] = {
+    PET_ANIM_RESURRECT, PET_ANIM_SNORE,      PET_ANIM_WAKE,     PET_ANIM_EAT,
+    PET_ANIM_KISS,      PET_ANIM_PLAY_SMALL, PET_ANIM_PLAY_BIG, PET_ANIM_BARF,
+    PET_ANIM_POO,       PET_ANIM_HAPPY,      PET_ANIM_CONFUSED, PET_ANIM_UPSET,
+    PET_ANIM_ANGRY,
+};
+#define PET_SHOWCASE_REEL_LEN ((uint8_t) (sizeof _pet_showcase_reel))
+
+// Put the reel's current entry on screen, alone, from its first frame.
+static void _pet_showcase_play(pet_state_t *s) {
     s->showcase_on = true;
-    s->showcase_anim = (uint8_t) next;
+    s->showcase_plays = 0;
     s->queue_len = 0;
-    // Clear both layers, so stepping between the two doesn't leave the other up.
+    // Clear both layers, so an entry that draws on one doesn't inherit whatever
+    // the last one left on the other.
     _pet_layer_play(s, PET_LAYER_CHARACTER, PET_ANIM_NONE);
     _pet_layer_play(s, PET_LAYER_STATUS, PET_ANIM_NONE);
-    _pet_start_anim(s, next);
+    // Only the first PET_SNORE_AUDIBLE_BREATHS breaths of a sleep are voiced, so
+    // a pet that has been snoring all night would reach the reel already hoarse.
+    // The reel is here to be heard: start its sleep from the first breath.
+    s->breath = 0;
+    _pet_start_anim(s, (pet_anim_id_t) _pet_showcase_reel[s->showcase_step]);
+}
+
+// One entry has had its passes: on to the next, round to the top at the end.
+// There is no way off the reel here -- it ends by being cancelled, or by
+// Movement's inactivity timeout taking the whole face back to the clock, which
+// a lap is deliberately just short of.
+static void _pet_showcase_advance(pet_state_t *s) {
+    s->showcase_step = (uint8_t) ((s->showcase_step + 1) % PET_SHOWCASE_REEL_LEN);
+    _pet_showcase_play(s);
 }
 
 // Hand the screen back to the live pet.
 //
 // Clearing showcase_on is not enough on its own. It only stops _pet_layer_tick
 // forcing a one-shot to loop, so a one-shot ends and rests of its own accord --
-// but a looping animation keeps looping, and a status animation leaves the
-// character layer on PET_ANIM_NONE, which the tick skips entirely. Either way
-// nothing reaches _pet_rest, and the showcased animation stays on screen for
-// good: a healthy pet stuck confused, snoring at noon, dead, or gone altogether
-// behind a pile it never made.
+// but a looping animation keeps looping, never reaches _pet_rest, and stays on
+// screen for good: a healthy pet stuck confused, snoring at noon, or dead. Five
+// of the reel's fourteen entries loop.
 //
 // Only rests if the showcase actually had the screen, since _pet_rest would
 // otherwise cut short whatever the pet was doing.
-static void _pet_showcase_exit(pet_state_t *s, bool keep_cursor) {
+//
+// `remember` is for the 0.5 s press that arrives on the way to LIGHT's 1.5 s
+// hold: it notes that the screen was taken from a running reel, so the hold
+// behind it cancels the reel instead of starting a new one.
+static void _pet_showcase_exit(pet_state_t *s, bool remember) {
     bool had_screen = s->showcase_on;
     s->showcase_on = false;
-    if (!keep_cursor) s->showcase_anim = PET_ANIM_NONE;
+    s->showcase_interrupted = remember && had_screen;
     if (had_screen) _pet_rest(s);
+}
+
+// LIGHT held 1.5 s: start the reel, or cancel the one that is running.
+//
+// showcase_on is never the thing to test here -- the 0.5 s press has always
+// already cleared it and put the pet back on screen. showcase_interrupted is
+// what says the reel was up a moment ago, which is why it exists.
+static void _pet_showcase_toggle(pet_state_t *s) {
+    if (s->showcase_interrupted) {
+        s->showcase_interrupted = false;
+        return;                 // the 0.5 s press has already rested the pet
+    }
+    s->showcase_step = 0;       // every start is from the top of the reel
+    _pet_showcase_play(s);
 }
 
 // Push the mood up one tic, wrapping past dead back to zero. _pet_rest sorts out
@@ -1374,7 +1433,8 @@ static void _pet_enter(pet_state_t *s) {
     _pet_layer_play(s, PET_LAYER_STATUS, PET_ANIM_NONE);
 #if PET_SHOWCASE
     s->showcase_on = false;
-    s->showcase_anim = PET_ANIM_NONE;   // a fresh visit starts the walk over
+    s->showcase_interrupted = false;    // a fresh visit starts the reel over
+    s->showcase_step = 0;
 #endif
     // Put the floor up from the first frame, rather than waiting for _pet_rest.
     _pet_set_status(s);
@@ -1507,10 +1567,9 @@ bool pet_face_loop(movement_event_t event, void *context) {
     pet_state_t *s = (pet_state_t *) context;
 
 #if PET_SHOWCASE
-    // Any real interaction drops out of the showcase.
+    // Any real interaction cancels the reel.
     switch (event.event_type) {
-        // Feed, sweep or shake: hand the screen back and forget the cursor, so
-        // the next hold starts the walk over.
+        // Feed, sweep or shake: hand the screen back, and that is the end of it.
         case EVENT_LIGHT_BUTTON_UP:
         case EVENT_ALARM_BUTTON_UP:
         case EVENT_SINGLE_TAP:
@@ -1518,10 +1577,14 @@ bool pet_face_loop(movement_event_t event, void *context) {
             _pet_showcase_exit(s, false);
             break;
         // The 0.5 s press arrives on the way to every 1.5 s hold: hand the
-        // screen back, which the hug's kiss needs, but keep the cursor.
+        // screen back, which the hug's kiss needs. LIGHT's hold behind it is the
+        // one that toggles the reel, so only that one needs to be told the reel
+        // was running; ALARM's only steps the mood and ends the reel either way.
         case EVENT_LIGHT_LONG_PRESS:
-        case EVENT_ALARM_LONG_PRESS:
             _pet_showcase_exit(s, true);
+            break;
+        case EVENT_ALARM_LONG_PRESS:
+            _pet_showcase_exit(s, false);
             break;
         default:
             break;
@@ -1539,11 +1602,25 @@ bool pet_face_loop(movement_event_t event, void *context) {
         // Light: short = feed, long = hug. The empty cases keep Movement from
         // lighting the LED on press and from reacting to the long release.
         case EVENT_LIGHT_BUTTON_DOWN:
+#if PET_SHOWCASE
+            // Start of the press, so start clean: the note the 0.5 s press
+            // leaves must not outlive the hold it was left for and cancel the
+            // next reel instead of starting it.
+            //
+            // Clearing it here rather than on the release is what makes that
+            // airtight. Movement drains a batch of pending events in enum
+            // order, and LONG_UP sorts before REALLY_LONG_PRESS -- so a release
+            // landing in the same batch as the 1.5 s timeout would wipe the note
+            // just before the hold read it. BUTTON_DOWN sorts first and always
+            // begins the press, so the note can only be set and read within one.
+            s->showcase_interrupted = false;
+#endif
+            break;
         case EVENT_LIGHT_LONG_UP:
             break;
         case EVENT_LIGHT_REALLY_LONG_PRESS:
 #if PET_SHOWCASE
-            _pet_showcase_next(s);
+            _pet_showcase_toggle(s);
 #endif
             break;
         case EVENT_LIGHT_BUTTON_UP:
@@ -1584,7 +1661,10 @@ bool pet_face_loop(movement_event_t event, void *context) {
 
         case EVENT_TIMEOUT:
             // Back to the clock when Movement calls time. Resigning is what
-            // drops the 8 Hz tick and turns tap detection back off.
+            // drops the 8 Hz tick and turns tap detection back off. A running
+            // showcase reel is left to it as well: a lap is 59.5 s against the
+            // default 60 s timeout, so the reel plays through once and the face
+            // bows out a moment into the second lap. See PET_SHOWCASE.
             movement_move_to_face(0);
             break;
         case EVENT_LOW_ENERGY_UPDATE:
