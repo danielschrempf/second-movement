@@ -2,7 +2,7 @@
 
 A Tamagotchi-style watch face for the [Sensor Watch](https://www.sensorwatch.net)
 on a Casio F-91W. One mood meter, five expressions, fourteen animations, ten
-sounds, and a pet that dies in under two days if you ignore it.
+sounds, and a pet that dies in about two days if you ignore it.
 
 **The face reads sideways** — turn the watch 90° clockwise so the main line runs
 top to bottom. All the art is drawn for that orientation; there is no upright
@@ -57,7 +57,7 @@ Long press is 0.5 s; the showcase holds in §10 are 1.5 s.
 
 | Press | Does | Notes |
 | --- | --- | --- |
-| `LIGHT` | Queue a meal | Up to four. Eating starts 3 s after the last press |
+| `LIGHT` | Queue a meal | Up to four on the plate. Eating starts 3 s after the last press; only four stay down per sitting |
 | `LIGHT` hold | Hug | Four a day help; past the cap it is still hugged, it just gains nothing |
 | `ALARM` | Sweep | Clears the floor — both a pile and a puddle. A poo still on its way is left alone |
 | `ALARM` hold | Resurrect | Only while dead |
@@ -101,11 +101,12 @@ steps stay integer. Six tics (24 quarter tics) is fatal.
 | Mess left on the floor | +1 / 6 h | Doubles the passive rate until swept |
 | Disturbed at night | +0.25 | Every time |
 | Made sick by over-shaking | +0.25 | And the play buff is taken back |
-| Eats one pip | −0.25 | Four pips per feeding |
+| Made sick by overfeeding | +0.25 | And the whole sitting's nutrition is taken back |
+| Eats one pip | −0.25 | Four pips per sitting, three sittings a day |
 | Hug | −0.25 | Four per calendar day |
 | Play | −0.5 | Once per 2 h cooldown |
 
-**Only waking seconds count.** Nothing decays between 21:00 and 05:00. The
+**Only waking seconds count.** Nothing decays between 21:00 and 06:00. The
 accounting is exact rather than approximate — `_pet_awake_between` converts any
 two timestamps into elapsed waking seconds, handling spans over whole nights and
 both day boundaries, and leftover seconds carry in a residual so that opening the
@@ -123,6 +124,34 @@ The pip timer waits on the eat animation rather than cutting it short, so a full
 plate of four takes about 17 s end to end. Twelve hours after a meal the pet
 squats and leaves a pile in cell 9. Until swept it decays at double rate.
 
+### Sittings, and being sick of it
+
+The waking day is fifteen hours and divides into three even **sittings** —
+breakfast 06:00, lunch 11:00, dinner 16:00 — and the pet keeps only **four pips
+down per sitting**. That is twelve pips a day if you spread them, which is the
+most care feeding can buy.
+
+The fifth pip in a sitting does not stay down. It leaves the plate, the barf
+animation plays in its place, and the sitting's nutrition goes with it:
+
+| | quarter tics |
+| --- | --- |
+| Pips 1–4 | −0.25 each, so −1.0 banked for the sitting |
+| Pip 5 | **+1.0** handed back, **+0.25** penalty on top |
+| Net for the sitting | **+0.25** — worse than never having fed at all |
+
+That is the same penalty a play barf charges, and it leaves the same puddle to
+sweep. Anything still on the plate is thrown out with it — the meal is over.
+
+**The sitting stays closed.** The count does not reset after a barf, so feeding
+again before the next sitting barfs again; by then there is no nutrition left to
+return and it costs only the +0.25. The pet is done eating until 11:00.
+
+Because the plate holds four and a sitting allows four, one full plate per
+sitting is exactly the ceiling: you have to press deliberately past it to make
+the pet sick. Being resurrected empties the stomach, so a pet that died overfed
+can eat straight away.
+
 The countdown is wall clock, so it usually expires while the face is in the
 background. Whenever it lands, the **scene is owed to you**: the floor stays
 clean until you are there to watch the pet squat, and only then does the pile go
@@ -138,7 +167,7 @@ never saw a poo at all.
 
 **When you feed decides what the poo costs.** It lands twelve hours later, and
 only waking time is charged, so a meal at 08:00 drops a pile around 20:00 that
-sits through the night and into the morning — four waking hours of double decay.
+sits through the night and into the morning — three waking hours of double decay.
 The same meal at 19:00 drops it around 07:00, an hour before a morning visit.
 See §8.
 
@@ -185,7 +214,7 @@ reward; a pet that silently ignored the button would read as broken.
 
 ## 6. Night
 
-Sleeps 21:00 – 05:00, breathing on a 2 s loop and snoring on two breaths in
+Sleeps 21:00 – 06:00, breathing on a 2 s loop and snoring on two breaths in
 three.
 
 Feeding, hugging or shaking a sleeping pet wakes it instead: +0.25 tic, no
@@ -203,32 +232,41 @@ Hold `ALARM` to resurrect: the grave fades, a spirit rises up the whole main
 line, and a new pet forms at zero tics with a clean floor, a reset hug cap and a
 cleared play cooldown.
 
-Ignored completely, a pet dies in **38–46 h of wall clock**. The spread depends
+Ignored completely, a pet dies in **39–48 h of wall clock**. The spread depends
 on how much of that window is night, which costs it nothing.
 
 ---
 
 ## 8. Balance
 
-Passive decay alone is 1 tic per 6 waking hours, so the pet needs roughly 2.5
-tics of care a day to hold level. From `check_balance.c`, quarter tics at the end
-of each of seven days:
+Passive decay alone is 1 tic per 6 waking hours, and the waking day is fifteen
+hours, so the pet needs exactly **2.5 tics of care a day** to hold level. From
+`check_balance.c`, quarter tics at the end of each of seven days:
 
 ```text
-                                    d1 d2 d3 d4 d5 d6 d7
-3/day, feed at 08:00 (morning)      5  8 10 13 16 24 24   DEAD
-3/day, feed at 13:00 (midday)       3  6  8 11 14 16 19   struggling
-3/day, feed at 19:00 (evening)      1  5  5  6  7  7  8   healthy
-2/day (08:00,19:00), feed morning   7 12 16 24 24 24 24   DEAD
-2/day (08:00,19:00), feed evening   3  7  9 12 15 17 24   DEAD
-1/day (evening only)                1 14 24 24 24 24 24   DEAD
-no care at all                      9 24 24 24 24 24 24   DEAD
+                                     d1 d2 d3 d4 d5 d6 d7
+3/day, feed at 08:00 (morning)        5  7  9 11 13 15 17   struggling
+3/day, feed at 13:00 (midday)         3  5  6  7  8  9 10   healthy
+3/day, feed at 19:00 (evening)        1  5  5  5  5  5  5   healthy
+2/day (08:00,19:00), feed morning     7 11 15 19 24 24 24   DEAD
+2/day (08:00,19:00), feed evening     3  7  9 11 13 15 17   struggling
+1/day (evening only)                  1 13 24 24 24 24 24   DEAD
+
+3/day, full plate at each (12 pips)   1  1  1  1  1  1  1   healthy
+3/day, 8 pips at one sitting          8 15 22 24 24 24 24   DEAD
+1/day, 8 pips at one sitting          4 24 24 24 24 24 24   DEAD
+no care at all                        9 23 24 24 24 24 24   DEAD
 ```
 
-Three visits a day with an evening meal converge and hold around 2 tics. Two a
-day die within the week; one a day dies on day three. A visit worth making is
-all three actions — a full plate of four, all four hugs, and a play if the
-cooldown is up.
+Three visits a day with an evening meal hold around 1 tic. Two a day either die
+or struggle; one a day dies on day three. A visit worth making is all three
+actions — a full plate of four, all four hugs, and a play if the cooldown is up.
+
+**Feeding at every sitting is the new ceiling.** Twelve pips across the three
+sittings holds the pet at one quarter tic indefinitely — the most attentive
+routine in the table, and the reward for spreading meals rather than stacking
+them. **Overfeeding is the sharpest way to lose.** Eight pips at one sitting is
+worse than not feeding at all, and kills inside four days.
 
 **Feed time is the sharpest lever in the game**, and it only became one when the
 sweep stopped cancelling pending poos (§4). Before that fix a tidy owner cancelled
@@ -252,8 +290,11 @@ contented face.
 
 ## 9. Sounds
 
-Ten sequences, each also flashing `SIGNAL`. Durations are 1/64 s; the buzzer is a
-monophonic square wave, so pitch and rhythm are the only tools.
+Nineteen sequences, each also flashing `SIGNAL`. Durations are 1/64 s; the
+buzzer is a monophonic square wave, so pitch and rhythm are the only tools.
+
+Thirteen are attached to a moment in an animation, as **cues** — a cell, a
+segment mask and an edge — rather than timed against it. See §14.
 
 | Sound | Cue | Is |
 | --- | --- | --- |
@@ -265,9 +306,36 @@ monophonic square wave, so pitch and rhythm are the only tools.
 | Barf slide | cell 7 `D` lights | Chromatic octave down, travelling with it |
 | Poo | cell 9 `B\|C` lights | One short low knock as the pile lands |
 | Play small / big | animation begins | Arpeggio up and back; big starts a whole tone up |
+| Wake | cell 7 fills, as the mouth opens | A yawn: up into the stretch, then settling |
+| Resurrect fade | resurrect begins | Two low notes under the vanishing tombstone |
+| Resurrect rise | cell 6 `A` lights | Two octaves of major arpeggio as the pet reassembles |
 
-Sounds are attached to animations as **cues** — a cell, a segment mask and an
-edge — rather than timed against them. See §14.
+The other six answer something with no art to cue against — a button that only
+moves a counter, or a change of state whose animation *loops*, where a cue would
+fire again on every turn. Those are played straight from the code that causes
+them.
+
+| Sound | Fires | Is |
+| --- | --- | --- |
+| Feed | every `LIGHT` press | One short blip, so a burst of presses ratchets |
+| Sweep | `ALARM`, when the floor had something on it | A brisk brush downwards |
+| Grumble | any interaction that disturbs sleep | Two low, curt notes — the lowest thing the pet says |
+| Death | the tic count reaches 6 | Four falling notes, slow enough to land as an ending |
+| Mood up / down | the mood changes while you watch | Two notes, the direction of the step |
+
+Three of those deserve their rule spelled out, because each is a moment that can
+recur without being a new event:
+
+- **Wake** plays for the morning and for a poke in the night. Only the morning
+  yawns; a poke has already grumbled, so `_pet_cue_audible` suppresses the yawn
+  by scene, the same mechanism that voices two snores in three.
+- **Death** tolls once. The scene survives a visit, so coming back to the same
+  tombstone is quiet — and `PET_ANIM_DEAD` loops, which is why this is an edge
+  in `_pet_rest` rather than a cue.
+- **Mood up / down** sounds only for a change earned in front of you. Arriving to
+  a pet that soured while the face was closed is silent: `_pet_enter` seeds
+  `shown_mood` before anything settles. Sweeping a clean floor is silent for the
+  same reason — the button really has done nothing.
 
 ### Silencing it
 
@@ -398,7 +466,7 @@ python3 check_sounds.py
 | `check_layers.c` | The procedural cells are off limits to every layer, the two layers overlap only in cell 9 where that is intended, and a rogue frame gets clipped | The region map or `_pet_layers` changes |
 | `check_awake_time.c` | Waking-seconds accounting is monotonic and additive over 400 spans, and handles whole nights and both day boundaries. Prints time-to-death from four start hours | `PET_HOUR_WAKE`/`PET_HOUR_SLEEP` or the decay rate change |
 | `check_balance.c` | A week of care at different visit rates and feed timings, printing the mood trajectory | Any tunable in the buff/debuff block changes |
-| `check_sounds.py` | Every cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is unreachable, and every animation has art | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_sounds.py` | Every cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is unreachable — whether it is cued or played directly — and every animation has art | **Any animation is redrawn**, or a cue or sound is edited |
 
 `check_sounds.py` parses `pet_face.c` directly, so it cannot go stale. Sample:
 
@@ -526,21 +594,28 @@ design, not a stub — there is no save format, no load path and none planned. A
 three ways to lose a pet are deliberate acts that mean opening the watch or
 rewriting it, so none of them can happen by surprise.
 
-**One LCD.** The art is drawn for the classic F-91W panel and is only correct
-there, so `_pet_draw` indexes `Classic_LCD_Display_Mapping` directly rather than
-choosing a table at runtime, and `pet_face.c` refuses to compile without
-`FORCE_CLASSIC_LCD_TYPE`:
+**One LCD, and no gate on it.** The art is drawn for the classic F-91W panel, so
+`_pet_draw` indexes `Classic_LCD_Display_Mapping` directly rather than choosing a
+table at runtime. Nothing stops the face building for another panel:
 
-```
-pet_face.c:37:2: error: #error "pet_face requires the classic LCD. Build with DISPLAY=classic."
+```sh
+make BOARD=sensorwatch_pro DISPLAY=custom -j8    # builds and links
 ```
 
-`DISPLAY=autodetect` is refused too — it decides at runtime, which is no
-guarantee. A garbled pet is a worse answer than a failed build, and `pet_face.c`
-is listed unconditionally in `watch-faces.mk`, so the refusal stops the whole
-firmware: to build for another panel, drop it from there and drop `pet_face`
-from `movement_config.h`. The segment map in §1 is that panel's; supporting the
-custom LCD means redrawing every animation, not picking a different table.
+On the custom LCD the pet is composited from the wrong geometry and will not read
+as intended. That is the documented cost of the face, not a bug to be guarded
+against — the segment map in §1 is the classic panel's, and supporting the custom
+one means redrawing every animation, not picking a different table.
+
+Two stricter versions were tried and both dropped. A bare `#error` on
+`FORCE_CLASSIC_LCD_TYPE` refused to compile at all, which — since `pet_face.c` is
+listed unconditionally in `watch-faces.mk` — stopped the *whole firmware* from
+building for another panel rather than just withholding the face. Wrapping the
+file in `#ifdef FORCE_CLASSIC_LCD_TYPE` fixed that by compiling it away to an
+empty translation unit, but it bought a build guarantee nobody had asked for at
+the price of a face that silently did not exist. Letting it build and saying
+plainly that it looks wrong is the smaller claim and the easier one to explain.
+The classic build is byte-identical under all three.
 
 ---
 
@@ -549,50 +624,57 @@ custom LCD means redrawing every animation, not picking a different table.
 | Item | Value |
 | --- | --- |
 | Tick rate on screen | 8 Hz |
-| Waking hours | 05:00 – 21:00 |
-| Passive decay | 1 tic / 6 waking hours |
+| Waking hours | 06:00 – 21:00, three even 5 h sittings |
+| Passive decay | 1 tic / 6 waking hours, so 2.5 tics a day |
 | Mood resolution | quarter tics, `uint8_t` |
-| Food queue | 4 pips |
+| Food queue | 4 pips on the plate, 4 kept down per sitting |
 | Hug allowance | 4 / calendar day |
 | Play ladder | 3 rungs, 3 s deaf + 5 s window between them |
 | Play buff cooldown | 2 h |
 | Mess appears | 12 h after a meal |
 | Fatal at | 6 tics |
 | Animations | 14, decoded from GIF exports |
-| Sounds | 10, cued to frames, at `BUZZER_PRIORITY_BUTTON` |
+| Sounds | 19 — 13 cued to frames, 6 played directly — at `BUZZER_PRIORITY_BUTTON` |
 | Muting | Follows the watch's `BTN beep` setting (`N` = silent) |
-| Flash | 135,192 text + 2,116 data = 137,308 (56% of 245,760) |
-| — of which is this face | **5,904 bytes**, 2.40% of the budget — see §16 |
-| RAM | **80 bytes** of context + 8 bytes of Movement's per-face arrays |
+| Flash | 138,424 text + 2,632 data = 141,056 (57% of 245,760) |
+| — of which is this face | **6,096 bytes**, 2.48% of the budget — see §16 |
+| RAM | **84 bytes** of context + 8 bytes of Movement's per-face arrays |
 
 ---
 
 ## 16. What it costs
 
 Measured by building the same firmware with and without `pet_face` in
-`movement_config.h` (PC, GCC 14.2):
+`movement_config.h` (Mac, GCC 15.3 — the PC's GCC 14.2 reports different totals
+for the same source, per the gotcha in `CLAUDE.md`):
 
 | | text | data | bss |
 | --- | --- | --- | --- |
-| With the pet | 135,192 | 2,116 | 4,600 |
-| Without | 129,368 | 2,036 | 4,592 |
-| **The face** | **+5,824** | **+80** | **+8** |
+| With the pet | 138,424 | 2,632 | 4,608 |
+| Without | 132,472 | 2,488 | 4,600 |
+| **The face** | **+5,952** | **+144** | **+8** |
 
-**5,904 bytes of flash**, 2.40% of the 245,760 available, leaving ~106 KB free.
+**6,096 bytes of flash**, 2.48% of the 245,760 available, leaving ~102 KB free.
 Where it goes:
 
 | | bytes |
 | --- | --- |
-| `pet_face_loop` — the whole state machine, since every `_pet_*` helper is static and gets inlined into it | 1,952 |
+| `pet_face_loop` — the whole state machine, since every `_pet_*` helper is static and gets inlined into it | 2,088 |
 | The fourteen frame tables | 1,812 |
-| `_pet_draw` — the compositor | 516 |
+| `_pet_draw` — the compositor | 440 |
 | `_pet_anims` | 272 |
-| Everything else (cue engine, waking-time maths, layer engine) | ~1,270 |
-| The ten sound sequences (`data`) | 80 |
+| The nineteen sound sequences (`data`) | 145 |
+| `_pet_sounds`, the dispatch table | 76 |
+| The nine cue tables | 65 |
+| Everything else (cue engine, waking-time maths, layer engine) | ~1,198 |
 
-**88 bytes of RAM.** `sizeof(pet_state_t)` is 80, `malloc`ed once in
+Two later passes account for 328 of that. Filling in every silent action — the
+nine sounds the first pass left out — cost **200 bytes**, and the three sittings
+with their overfeed barf another **128**. Neither was worth economising on.
+
+**92 bytes of RAM.** `sizeof(pet_state_t)` is 84, `malloc`ed once in
 `pet_face_setup` and never freed; Movement's `watch_face_contexts` and
-`scheduled_tasks` arrays each grow by one entry. That is 0.27% of the 32 KB.
+`scheduled_tasks` arrays each grow by one entry. That is 0.28% of the 32 KB.
 
 ### Battery
 

@@ -53,7 +53,7 @@
  * The showcase holds fire their 0.5 s action on the way past, so stepping an
  * animation also hugs the pet.
  *
- * The pet sleeps 21:00-05:00. Nothing decays while it does; disturbing it costs
+ * The pet sleeps 21:00-06:00. Nothing decays while it does; disturbing it costs
  * tics and earns no buff. Nothing runs while you are on another face; time is
  * caught up lazily on the next activate.
  *
@@ -66,19 +66,19 @@
  *   daily wear it lives indefinitely, but a reflash or a battery pull hatches a
  *   new one. There is no save format and none is planned.
  *
- *   The art is drawn for the classic F-91W LCD and is only correct there. The
- *   segment geometry below is that panel's, the mapping is not chosen at
- *   runtime, and pet_face.c refuses to build without DISPLAY=classic.
+ *   The art is drawn for the classic F-91W LCD. The segment geometry below is
+ *   that panel's and the mapping is not chosen at runtime, so the face builds
+ *   and runs with DISPLAY=custom but does not read correctly there.
  *
- * Spec: _cs50ref/CS50x Final Project.md. How it behaves and why each timing is
- * what it is: _cs50ref/MANUAL.md. Process log: _cs50ref/DEVLOG.md. Sounds are
- * cued to specific frames of their animation, and
- * _cs50ref/tools/check_sounds.py asserts they still line up after a redraw.
+ * Sounds are not timed against their animation -- each is cued to a moment in
+ * the art ("when cell 9's bottom edge lights"), so redrawing an animation
+ * carries its sounds along with it instead of leaving them stranded. See the
+ * cue tables in pet_face.c.
  */
 
 // ---- Tunables ---------------------------------------------------------------
 
-// Mood is stored in quarter tics so the 0.25 steps in the spec stay integers.
+// Mood is stored in quarter tics so the 0.25 steps below stay integers.
 #define PET_QT_PER_TIC              4
 #define PET_TIC(n)                  ((n) * PET_QT_PER_TIC)
 #define PET_QT_DEAD                 PET_TIC(6)
@@ -129,13 +129,29 @@
 // Shaking always plays with the pet, but the buff only lands once per cooldown.
 #define PET_PLAY_COOLDOWN_SECONDS   (2 * 60 * 60)
 
-// Day parts (local time, 24 h clock)
-#define PET_HOUR_WAKE               5   // 05:00 morning starts
-#define PET_HOUR_AFTERNOON          10  // 10:00 afternoon starts
+// Day parts (local time, 24 h clock). The waking day is fifteen hours so that it
+// divides evenly into the three sittings below, and the morning boundary is the
+// first of those, so "morning" and "breakfast" mean the same window.
+#define PET_HOUR_WAKE               6   // 06:00 morning starts
+#define PET_HOUR_AFTERNOON          11  // 11:00 afternoon starts
 #define PET_HOUR_SLEEP              21  // 21:00 night starts
 
 // Only waking seconds count against the pet; nothing decays while it sleeps.
 #define PET_AWAKE_SECONDS_PER_DAY   ((PET_HOUR_SLEEP - PET_HOUR_WAKE) * 60 * 60)
+
+// Meals. The waking day divides into three even sittings -- breakfast at 06:00,
+// lunch at 11:00, dinner at 16:00 -- and the pet keeps only PET_FEED_SEGMENT_CAP
+// pips down per sitting. The next one comes straight back up and takes the
+// sitting's nutrition with it; see _pet_feed_barf.
+#define PET_FEED_SEGMENTS           3
+#define PET_FEED_SEGMENT_HOURS      ((PET_HOUR_SLEEP - PET_HOUR_WAKE) / PET_FEED_SEGMENTS)
+#define PET_FEED_SEGMENT_CAP        4   // pips kept down per sitting
+
+// The sittings have to be equal, or the last one is short and the cap means
+// something different at dinner than at breakfast.
+#if (PET_HOUR_SLEEP - PET_HOUR_WAKE) % PET_FEED_SEGMENTS
+#error "the waking day must divide evenly into PET_FEED_SEGMENTS sittings"
+#endif
 
 // How long a disturbed pet stays up before settling again.
 #define PET_NIGHT_AWAKE_SECONDS     30
@@ -159,15 +175,24 @@
 #define PET_BUFF_POSITION           0   // plus / minus sign
 #define PET_FOOD_POSITION           3   // the four pips
 
-// Showcase: walk the animations and moods without waiting on the clock.
+// Showcase: a gallery of the pet's animations and moods.
+//
+// Most of what the pet can do is gated behind real time -- angry takes most of a
+// day of neglect, dead a day and a half, snoring waits until 21:00 -- so a
+// wearer could own this face for a week without seeing half its art. These two
+// holds walk the whole set on demand.
 //
 //   LIGHT held 1.5 s   hold the next animation on screen; walks the whole list
 //                      and then hands the screen back to the live pet
 //   ALARM held 1.5 s   push the mood up one tic, wrapping past dead back to zero
 //
-// Both fire their 0.5 s long-press on the way past, since Movement delivers that
-// first: LIGHT spends a hug, ALARM resurrects a dead pet and otherwise does
-// nothing. Set to 0 for a build where the buttons only play the game.
+// Held animations stay put rather than flashing past once, so a one-shot can be
+// looked at for as long as you like. Both holds fire their 0.5 s long-press on
+// the way past, since Movement delivers that first: LIGHT spends a hug, ALARM
+// resurrects a dead pet and otherwise does nothing.
+//
+// Set to 0 to drop the gallery and its code, leaving the buttons to play the
+// game and nothing else.
 #define PET_SHOWCASE          1
 
 // ---- Frames -----------------------------------------------------------------
@@ -201,7 +226,7 @@
 //
 // Per-cell constraints, verified against Classic_LCD_Display_Mapping. Ties are
 // single electrical addresses: both halves light together or not at all. Full
-// table in _cs50ref/SEGMENT_MAP.md.
+// region table in _pet_layers, at the top of pet_face.c.
 //
 //   0   right column, top   all 8 independent, H included — the only such cell
 //   1   below it            6 controls; B+C and E+F are tied whole edges
@@ -282,7 +307,7 @@ typedef struct {
 
 typedef struct {
     // NULL only for PET_ANIM_NONE, which is how a layer says it draws nothing;
-    // check_sounds.py asserts every other row has art.
+    // Every other row has art; only NONE is allowed to draw nothing.
     const pet_frame_t *frames;
     uint8_t count;
     bool loop;
@@ -306,7 +331,7 @@ typedef struct {
     uint8_t cues_fired;         // bit per cue, for the ones that fire once
 } pet_layer_t;
 
-// Every animation in the spec's checklist.
+// Every animation the pet can play.
 typedef enum {
     PET_ANIM_NONE = 0,
     // moods (looped while resting)
@@ -335,7 +360,12 @@ typedef enum {
 // Some sounds are in two parts, the halves cued to different moments of the same
 // animation -- the barf's "uh oh" over the wriggling mouth, the slide once the
 // contents are on their way.
+//
+// The second group has no art to hang a cue on: a button press that only moves
+// a counter, or a change of state whose animation loops and so would re-cue for
+// ever. Those are played straight from the code that causes them.
 typedef enum {
+    // cued to a moment in an animation
     PET_SOUND_SNORE_IN = 0,
     PET_SOUND_SNORE_OUT,
     PET_SOUND_KISS,
@@ -346,6 +376,16 @@ typedef enum {
     PET_SOUND_POO,
     PET_SOUND_PLAY_SMALL,
     PET_SOUND_PLAY_BIG,
+    PET_SOUND_WAKE,
+    PET_SOUND_RESURRECT_FADE,
+    PET_SOUND_RESURRECT_RISE,
+    // played directly by the interaction or transition that causes them
+    PET_SOUND_FEED,
+    PET_SOUND_SWEEP,
+    PET_SOUND_GRUMBLE,
+    PET_SOUND_DEATH,
+    PET_SOUND_MOOD_UP,
+    PET_SOUND_MOOD_DOWN,
     PET_SOUND_COUNT
 } pet_sound_id_t;
 
@@ -365,7 +405,7 @@ typedef enum {
 
 // What the pet is doing right now, on screen.
 typedef enum {
-    PET_SCENE_IDLE = 0,     // awake, resting between interactions (the spec's "blink")
+    PET_SCENE_IDLE = 0,     // awake, resting between interactions: the mood loop
     PET_SCENE_ASLEEP,       // night, snoring
     PET_SCENE_NIGHT_AWAKE,  // night, disturbed: interactions cost tics and give nothing
     PET_SCENE_FEEDING,      // pips queued or being eaten
@@ -392,10 +432,23 @@ typedef struct {
     uint32_t last_play_buff_ts; // the play cooldown runs from here
     uint8_t  hugs_today;
     uint8_t  hug_day;           // local day-of-month hugs_today belongs to
+    // The current sitting, and what has been eaten in it. seg_buff_qt is the eat
+    // buff granted in this sitting and not yet thrown up, so an overfeed knows
+    // exactly what to hand back -- and a second one in the same sitting knows
+    // there is nothing left to.
+    uint8_t  pips_this_seg;
+    uint8_t  seg_buff_qt;
+    uint8_t  fed_day;           // local day-of-month the two above belong to
+    uint8_t  fed_seg;           // ... and which of that day's sittings
     uint8_t  woke_day;          // local day-of-month the wake animation last played
 
     // -- Per-visit state. Reset every activate.
     pet_scene_t scene;
+    // The mood the pet last settled into. _pet_rest sounds a step whenever the
+    // mood it is about to show differs, so a change earned in front of you is
+    // heard; seeding this on the way in keeps a change that happened while the
+    // face was closed silent.
+    uint8_t  shown_mood;
     pet_layer_t layer[PET_LAYER_COUNT];
     pet_anim_id_t queue[PET_QUEUE_LEN];     // sequences on the character layer
     uint8_t  queue_len;

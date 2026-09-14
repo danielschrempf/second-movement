@@ -98,6 +98,29 @@ def read_sounds(src):
     return out
 
 
+def read_direct(src):
+    """{PET_SOUND_X: [functions that play it]} for sounds played without a cue.
+
+    Not every sound has art to attach to: a button that only moves a counter has
+    no animation at all, and a looping one -- a mood, the tombstone -- would
+    re-cue on every turn. Those are played straight from the code that causes
+    them, and still have to be reachable.
+    """
+    heads = [(m.start(), m.group(1))
+             for m in re.finditer(r"^static [\w ]+?\*?(_pet_\w+)\s*\(", src, re.M)]
+    out = {}
+    for m in re.finditer(r"_pet_play_sound\(\s*s\s*,(.*?)\);", src, re.S):
+        where = "?"
+        for at, name in heads:
+            if at < m.start():
+                where = name
+        # The ternary in _pet_rest picks between two, so take every name in the
+        # argument; the cue path passes a variable and contributes none.
+        for sound in re.findall(r"PET_SOUND_\w+", m.group(1)):
+            out.setdefault(sound, []).append(where)
+    return out
+
+
 def read_anims(src):
     """[(anim, frames_name, loops, cues_name)]"""
     table = src[src.index("static const pet_anim_t _pet_anims"):]
@@ -169,6 +192,7 @@ def main():
     src = open(path, encoding="utf-8", errors="replace").read()
     frames, cues, sounds = read_frames(src), read_cues(src), read_sounds(src)
     anims = read_anims(src)
+    direct = read_direct(src)
 
     print("sound cues against the art they are attached to\n")
 
@@ -224,11 +248,23 @@ def main():
               "" if fname else "PET_NO_FRAMES -- this animation draws nothing")
 
     print()
-    # A sound nothing cues is dead weight, and usually means a cue was dropped.
+    # Sounds with no art to cue against. There is no frame to check them
+    # concerning, but they still have to exist and still have to be played.
+    for name in sorted(direct):
+        used.add(name)
+        label = name.replace("PET_SOUND_", "").lower()
+        callers = ", ".join(sorted(set(direct[name])))
+        check("%s: sound is defined" % label,
+              name in sounds and sounds[name] is not None,
+              "played directly by %s" % callers)
+
+    print()
+    # A sound nothing reaches is dead weight, and usually means a cue was
+    # dropped.
     for name in sorted(sounds):
         if name not in used:
             check("%s is reachable" % name.replace("PET_SOUND_", "").lower(), False,
-                  "defined but no cue plays it")
+                  "defined but nothing cues it or plays it")
 
     print("\n%s" % ("FAILURES ABOVE" if fails else "all checks passed"))
     return 1 if fails else 0

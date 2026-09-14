@@ -88,7 +88,7 @@ cc -O2 -o check_layers check_layers.c && ./check_layers
 | `check_layers.c` | The cells drawn from state — the buff sign and the food pips — are off limits to every layer, the two layers overlap only in cell 9 where that is intended, and a rogue frame gets clipped | The region map or `_pet_layers` changes |
 | `check_awake_time.c` | The waking-seconds accounting is monotonic and additive, and handles spans over whole nights and both day boundaries. Also prints how long neglect takes to kill the pet | `PET_HOUR_WAKE` / `PET_HOUR_SLEEP` or the decay rate change |
 | `check_balance.c` | Simulates a week of care at different check-in rates and feed timings, printing the mood trajectory | Any tunable in the buff/debuff block changes |
-| `check_sounds.py` | Every sound cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is left unreachable, and every animation has a frame table | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_sounds.py` | Every sound cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is left unreachable — cued or played directly — and every animation has a frame table | **Any animation is redrawn**, or a cue or sound is edited |
 | `check_showcase.py` | From every position in the showcase walk, leaving it by any route puts the live pet back on screen showing its real mood, with nothing on the floor it did not put there | The showcase, `_pet_layer_tick` or `_pet_rest` change, or an animation is added to the walk |
 
 `check_layers.c` and `check_awake_time.c` copy their constants from the
@@ -133,3 +133,14 @@ It also catches a cue firing more often than intended. A segment flickers as
 something moves through its cell, so a condition can come true several times in
 one pass; `once` in the cue table suppresses the repeats, and this reports both
 what fired and what was suppressed so the choice stays visible.
+
+Not every sound has art to attach to. A button that only moves a counter has no
+animation at all, and a looping one — a mood, the tombstone — would re-cue on
+every turn, so those sounds are played straight from the code that causes them.
+`read_direct()` finds those calls and names the function each one lives in, so
+the "nothing reaches this sound" guarantee still covers them:
+
+```text
+grumble: sound is defined                                ok
+    played directly by _pet_disturb
+```

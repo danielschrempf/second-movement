@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define PET_HOUR_WAKE   5
+#define PET_HOUR_WAKE   6
 #define PET_HOUR_SLEEP  21
 #define PET_AWAKE_SECONDS_PER_DAY ((PET_HOUR_SLEEP - PET_HOUR_WAKE) * 60 * 60)
 #define PET_QT_PER_TIC  4
@@ -41,17 +41,17 @@ static void check(const char *what, uint32_t got, uint32_t want) {
 
 int main(void) {
     uint32_t d0 = 0, d1 = 86400;
-    puts("waking-seconds accounting (sleep 21:00-05:00, 16 h awake/day)");
-    check("whole day, midnight to midnight",        awake_between(d0, d1), H(16));
-    check("05:00 -> 21:00 (the whole waking day)",  awake_between(d0+H(5), d0+H(21)), H(16));
-    check("21:00 -> 05:00 next day (all night)",    awake_between(d0+H(21), d1+H(5)), 0);
+    puts("waking-seconds accounting (sleep 21:00-06:00, 15 h awake/day)");
+    check("whole day, midnight to midnight",        awake_between(d0, d1), H(15));
+    check("06:00 -> 21:00 (the whole waking day)",  awake_between(d0+H(6), d0+H(21)), H(15));
+    check("21:00 -> 06:00 next day (all night)",    awake_between(d0+H(21), d1+H(6)), 0);
     check("20:00 -> 22:00 (only 20-21 counts)",     awake_between(d0+H(20), d0+H(22)), H(1));
-    check("04:00 -> 06:00 (only 05-06 counts)",     awake_between(d0+H(4), d0+H(6)), H(1));
+    check("05:00 -> 07:00 (only 06-07 counts)",     awake_between(d0+H(5), d0+H(7)), H(1));
     check("23:00 -> 02:00, entirely at night",      awake_between(d0+H(23), d1+H(2)), 0);
     check("zero-length span",                       awake_between(d0+H(12), d0+H(12)), 0);
     check("backwards span clamps to 0",             awake_between(d1, d0), 0);
-    check("a full week",                            awake_between(d0, d0 + 7*86400), 7*H(16));
-    check("18:00 -> 08:00 next day (3 h + 3 h)",    awake_between(d0+H(18), d1+H(8)), H(6));
+    check("a full week",                            awake_between(d0, d0 + 7*86400), 7*H(15));
+    check("18:00 -> 08:00 next day (3 h + 2 h)",    awake_between(d0+H(18), d1+H(8)), H(5));
 
     puts("\nmonotonic + additive over 400 random-ish spans");
     uint32_t prev = 0; bool mono = true, additive = true;

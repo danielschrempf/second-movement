@@ -1445,3 +1445,176 @@ not a guarantee of anything. A garbled pet is a worse answer than a failed
 build. The cost is that `pet_face.c` is listed unconditionally in
 `watch-faces.mk`, so this refuses the whole firmware for another panel, not just
 the face; the error message says which two lines to remove.
+
+---
+
+## Session 16 — the actions that made no sound
+
+Wearing it for a while turned up something the checks could never fail: the pet
+was silent for most of what you actually *do* to it. Ten sounds existed and all
+ten were correct, so `check_sounds.py` passed every time. It was only auditing
+the cues that had been written, not asking which moments had none.
+
+The gap was lopsided in a telling way. Everything the pet does *to itself* —
+snoring, eating, barfing, pooing, playing — had a sound. Everything *you* do to
+it mostly did not: feeding, sweeping and resurrecting were all mute, and so was
+being woken in the night, which is the only penalty in the game. Sounds had been
+written alongside the animations, so anything without art had been skipped by
+default rather than by decision.
+
+Nine new sequences, +200 bytes of flash. The interesting part was not the notes.
+
+**Cues cannot carry all of them.** A cue names a moment in an animation, which
+is exactly right when there is art to name. Three of the silent actions have
+none. A feed press only moves a counter; the eating is three seconds away and
+already had its own sounds. Sweeping changes the floor, not the pet. And death
+and a mood change both land on *looping* animations, where a cue fires again on
+every turn of the loop — a tombstone that tolls for ever.
+
+So those are played directly by the code that causes them, and the split is now
+the shape of the sound enum: cued, then direct.
+
+**Which meant the check had a hole.** `check_sounds.py` failed a sound nothing
+cued — a good rule, and one that would have failed all six direct ones. The lazy
+fix was to exempt them. Instead it now finds `_pet_play_sound` calls in the
+source and names the function each lives in, so the "nothing reaches this sound"
+guarantee still covers every sound, and the report says how each is reached:
+
+```text
+grumble: sound is defined                                ok
+    played directly by _pet_disturb
+```
+
+**Three of them needed a rule, not just a sequence.** Each is a moment that can
+recur without being a new event, and the first draft of each was wrong:
+
+- `PET_ANIM_WAKE` plays both for the morning and for a poke in the night, so
+  cueing a yawn to it yawned at a pet that had just been woken against its will.
+  `_pet_cue_audible` suppresses the yawn by scene — the same mechanism that
+  voices two snores in three — and `_pet_disturb` moves the scene *before*
+  starting the animation so there is something to test.
+- The death knell is an edge on entering `PET_SCENE_DEAD`, not a cue on
+  `PET_ANIM_DEAD`. Because the scene survives a visit, returning to the same
+  tombstone is quiet.
+- The mood step only sounds for a change earned in front of you. `_pet_enter`
+  seeds `shown_mood` after the catch-up, so arriving to a pet that soured while
+  the face was closed opens silently. You were not there for it.
+
+The same principle settled sweeping a clean floor: silent, because the button
+really has done nothing. A sound is a claim that something happened.
+
+**What was already right.** The play ladder reads as an escalation on its own —
+small is a C arpeggio, big the same figure a whole tone up, then the barf — so
+nothing was added there. Worth recording as a thing that looked like a gap in a
+list and was not one in the firmware.
+
+---
+
+## Session 17 — three sittings, and a pet that can be overfed
+
+Feeding had no ceiling. Four pips was the size of the *plate*, not a limit: wait
+seventeen seconds for the plate to clear and you could fill it again, all day, and
+each pip was worth a quarter tic. Nothing in the rules said no.
+
+**The waking day moved to make room for the fix.** Overfeeding needs a window to
+be measured against, and 05:00–21:00 is sixteen hours, which does not divide into
+three. 06:00–21:00 is fifteen: breakfast 06:00, lunch 11:00, dinner 16:00, five
+hours each. `PET_HOUR_AFTERNOON` moved from 10:00 to 11:00 at the same time so
+the daypart boundary and the first sitting are the same line — "morning" and
+"breakfast" now mean one thing rather than two. A `#error` guards the division,
+because an uneven split would make the cap mean something different at dinner
+than at breakfast and nothing would say so.
+
+This diverges from the spec, which says 9pm–5am with morning 5am–10am. The
+divergence is deliberate and this is the record of it.
+
+**The rule.** Four pips stay down per sitting. The fifth leaves the plate, plays
+the barf in place of the eat, and takes the sitting's nutrition with it: the
+whole −1.0 tic handed back, plus the +0.25 a play barf charges, so the sitting
+nets +0.25 — worse than never having fed at all. The plate is thrown out with it.
+
+`seg_buff_qt` is the reason there is state rather than arithmetic. The refund has
+to be *what was actually banked this sitting*, not four times the pip value,
+because the second barf in a sitting has nothing left to return and must cost
+only the penalty. Tracking the granted buff directly says that without a special
+case, and survives the constants changing.
+
+The sitting stays closed after a barf rather than resetting. Resetting would have
+made throwing up a 0.25-tic tax on an unlimited feeding loop; keeping it closed
+makes it a wall, which is what a cap is for. Resurrection clears it, or a pet
+that died overfed would come back unable to eat.
+
+**What the hour change cost, which was not nothing.** One waking hour a day is
+one less hour of decay, and the balance table moved under it — 2.67 tics a day of
+passive decay became exactly 2.5. Routines that used to die now struggle:
+
+```text
+                                    before        after
+3/day, feed at 08:00        DEAD on day 6     struggling (17)
+3/day, feed at 13:00       struggling (19)       healthy (10)
+2/day, feed evening         DEAD on day 7     struggling (17)
+```
+
+Neglect death went from 38–46 h to 39–48 h, so the front-page claim of "under two
+days" became "about two days". Worth recording that a scheduling change made to
+tidy up an arithmetic problem quietly rebalanced the whole game.
+
+**And it raised the ceiling it was meant to lower.** Four pips per sitting across
+three sittings is twelve a day — three times what any routine in the table fed
+before. `3/day, full plate at each` now holds at one quarter tic indefinitely,
+the healthiest line in the sim. The cap punishes stacking meals, not feeding: the
+pet wants to be fed often, just not all at once. That reads right, and it is the
+opposite of what a cap sounds like it would do.
+
+**Both harnesses had copied the constants.** `check_awake_time.c` failed loudly
+and usefully — five cases with `05:00` in their *names* and `H(16)` in their
+expectations. `check_balance.c` did not fail at all, which was worse: it fed
+exactly four pips at one visit, so it sat precisely on the new cap and modelled
+the new rule correctly by accident. It now models the sittings properly and has
+three routines that exercise them, including two that overfeed.
+
+---
+
+## Session 18 — making it mergeable
+
+Not a behaviour change: a packaging one, found by asking what an upstream PR
+would actually contain.
+
+**The file list is four, not three.** `pet_face.c`, `pet_face.h`,
+`watch-faces.mk`, and — the one easy to forget — `movement_faces.h`, which is
+the aggregate header every face is included from. Checking five upstream face
+additions (`world_clock2`, `hydration`, `tomato`, `tide`, `local_solar_time`)
+they all touch exactly those four and nothing else. `movement_config.h` is the
+*user's* face list, not the project's: four of the five left it alone, and a PR
+that edits it is asking to change what everyone else's watch runs.
+
+**The `#error` was a blocker.** `pet_face.c` is listed unconditionally in
+`watch-faces.mk`, so refusing to compile without `FORCE_CLASSIC_LCD_TYPE` did not
+withhold the face on a custom panel — it stopped the entire firmware from
+building. `make BOARD=sensorwatch_pro DISPLAY=custom` failed at `pet_face.o`.
+Perfectly fine while the only person building this was me, and fatal the moment
+anyone else pulls it.
+
+The first fix was to compile away rather than refuse: wrap the whole of
+`pet_face.c` in `#ifdef FORCE_CLASSIC_LCD_TYPE` so it becomes an empty
+translation unit elsewhere, and leave the `pet_face` macro undefined in the
+header. That worked — a custom build compiled the file, got nothing, and linked.
+
+**Then the gate came out entirely**, which is where this ended up. Both mappings
+are `static const` arrays in `watch_common_display.h`, so nothing was ever
+stopping the face compiling for the custom panel; the guard existed only to stop
+it *looking wrong*. That is a judgement the person building the firmware is
+better placed to make than the face is. It now builds everywhere and the header
+says plainly that the custom LCD will not read correctly.
+
+The rule the `#error` broke is still worth stating: **a guard on a shared build
+should withhold the thing it guards, not the build.** It could not tell "this
+face does not work here" from "you cannot build anything here", and only ever
+expressed the second. The `#ifdef` fixed exactly that — and then turned out to be
+answering a question nobody had asked. Three versions, one behaviour, and the
+classic build is byte-identical across all of them, which is the tell that none
+of the strictness was protecting anybody.
+
+What survives is the plain statement at the top of `pet_face.c`: the art is the
+classic panel's geometry, the face runs anywhere, and on the custom LCD it will
+not read as intended.
