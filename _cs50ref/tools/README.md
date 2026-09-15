@@ -94,7 +94,7 @@ python3 check_economy.py
 | `check_layers.c` | The cells drawn from state — the buff sign and the food pips — are off limits to every layer, the two layers overlap only in cell 9 where that is intended, and a rogue frame gets clipped | The region map or `_pet_layers` changes |
 | `check_awake_time.c` | The waking-seconds accounting is monotonic and additive, and handles spans over whole nights and both day boundaries. Also prints how long neglect takes to kill the pet | `PET_HOUR_WAKE` / `PET_HOUR_SLEEP` or the decay rate change |
 | `check_balance.c` | Simulates a week of care at different check-in rates and feed timings, printing the mood trajectory, then a pair of visits inside one sitting for the settling cooldown | Any tunable in the buff/debuff block changes |
-| `check_sounds.py` | Every sound cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is left unreachable — cued or played directly — and every animation has a frame table | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_sounds.py` | Every sound cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no two cues on one animation land on the same tick, no sound is left unreachable — cued or played directly — and every animation has a frame table | **Any animation is redrawn**, or a cue or sound is edited |
 | `check_economy.py` | Every figure in [MANUAL.md](../MANUAL.md) §3 — each action's value, each daily ceiling, both barf totals and the visits table — still matches the tunables in `pet_face.h` | Any buff, debuff, cap or cooldown changes, or §3 is reworded |
 | `check_showcase.py` | The reel visits every entry in order for its allotted passes and wraps, and from every position in it, leaving by any route puts the live pet back on screen showing its real mood, with nothing on the floor it did not put there. Also prints how long a lap takes | The showcase, `_pet_layer_tick` or `_pet_rest` change, or the reel is reordered |
 
@@ -148,6 +148,17 @@ It also catches a cue firing more often than intended. A segment flickers as
 something moves through its cell, so a condition can come true several times in
 one pass; `once` in the cue table suppresses the repeats, and this reports both
 what fired and what was suppressed so the choice stays visible.
+
+The last thing it checks is the one that loses a sound outright. The buzzer is
+monophonic and starting a sound aborts whatever is playing, so cues on the same
+animation take the buzzer from each other. Cutting one short is fine — a sound
+only has to *start* on its visual moment, and handing over mid-phrase is how a
+scene changes gear — and that is reported rather than failed. Two cues on the
+**same tick** is not fine: `_pet_fire_cues` walks the table in order within a
+single frame, so the earlier one is aborted before it has sounded at all. It does
+not play shortened, it vanishes, and nothing about the art looks wrong when it
+happens. If a redraw ever collapses two conditions onto one frame, this is what
+says so.
 
 Not every sound has art to attach to. A button that only moves a counter has no
 animation at all, and a looping one — a mood, the tombstone — would re-cue on

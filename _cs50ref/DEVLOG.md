@@ -2159,3 +2159,96 @@ a countdown to disagree.
 All six harnesses pass. None of them model the deaf period: `check_balance.c`
 scores sessions, not their pacing, which is the right seam — it is why a change
 to how the ladder is timed did not need a harness edited to stay green.
+
+---
+
+## Session 23 — the collision that wasn't, and the check that would have said so
+
+Dan, following a walk through how the snore is voiced: *"The sounds don't need to
+land close to each other, they can cut off early so long as they start on the
+visual cue. Is this possible?"*
+
+It is, and it is already what happens.
+`watch_buzzer_play_sequence_with_volume` calls `watch_buzzer_abort_sequence` as
+its first statement, and `movement_play_sequence` only refuses a sound when
+`priority < pending_sequence_priority`. Every pet sound carries
+`BUZZER_PRIORITY_BUTTON`, so `0 < 0` is false and no pet sound ever loses to
+another. A cue fires, its note starts, whatever was sounding stops. Handing over
+mid-phrase is free.
+
+That left one case where the handover is not a handover: **two cues on the same
+tick**. `_pet_fire_cues` walks the cue table in order within a single frame, so
+both call `_pet_play_sound` in the same tick and the earlier is aborted before it
+has sounded at all. It does not play shortened. It vanishes, and the art still
+looks exactly right.
+
+### The barf was never clipped
+
+I told Dan that `barf_uhoh` was already losing a note — 12 ticks of sound with
+the slide cueing at tick 9 — and offered to shorten it. It isn't. The sequence is
+two notes, not four:
+
+```c
+static int8_t _pet_sound_barf_uhoh[] = {
+    BUZZER_NOTE_A5, 24,
+    BUZZER_NOTE_F5, 24,
+    0
+};
+```
+
+48 units, 6 ticks, and the slide cues at 9. Three ticks of headroom.
+
+Worth recording how the wrong number was arrived at, because the mistake is
+reusable. The sequence had been read with a `sed` carrying two ranges,
+`/_pet_sound_barf_uhoh/,/^};/p;/_pet_sound_eat_chew/,/0 };/p`, whose spans
+overlap — so the block printed twice, interleaved line by line, and A5/F5 read as
+A5/A5/F5/F5. The contradiction was already sitting in an earlier `nm -S`:
+`_pet_sound_barf_uhoh` is 5 bytes, which is two notes and a terminator and cannot
+be four notes. Two measurements disagreed and only one was read.
+
+So no change to the sound. The check below is what proves it, which is the better
+outcome than a fix nobody could verify.
+
+### The check
+
+`check_sounds.py` grows a per-animation pass over every cue that fires, sorted by
+tick:
+
+- **Two cues on one tick fails.** Nothing else in the project can see this.
+- **A sound cut short only reports.** That is a design decision Dan made
+  explicitly, not a defect, so failing on it would train the harness to be
+  ignored.
+
+That asymmetry is the whole design. A harness that fails on deliberate behaviour
+gets its output skimmed, and the one line that matters goes past with the rest.
+
+```text
+resurrect: no two cues share a tick     ok
+    resurrect_fade [0], resurrect_rise [15]
+eat: no two cues share a tick           ok
+    eat_gulp [9], eat_chew [10, 12, 14]
+snore: no two cues share a tick         ok
+    snore_in [0], snore_out [9]
+barf: no two cues share a tick          ok
+    barf_uhoh [0], barf_slide [9]
+```
+
+Four animations carry more than one cue. The tightest margin in the art is the
+eat: the gulp gets one tick before the first chew and needs 0.75 of it.
+
+Both paths were verified by breaking a copy rather than trusting the code to be
+right. Repointing `snore_out` at mask 0 so both snore cues fire on tick 0 gives
+`FAIL ... two land on tick [0], and the earlier never sounds`, exit 1. Doubling
+`barf_uhoh` to 12 ticks gives `barf_uhoh gets 9 of its 12.0 ticks, handing over
+on the beat`, still exit 0. A check that has never been seen to fail is a check
+that has not been tested.
+
+No firmware change: `pet_face.c` is untouched, so the flash figures stand.
+
+### The wrist
+
+Dan, on the shake tuning and the ladder timing after the deaf period came out:
+*"the wrist test is fine, timings feel good."* So `PET_SHAKE_TAPS` 3 at
+`PET_SHAKE_THRESHOLD` 8, and a 2 s flourish followed by a 5 s window with nothing
+between them, are settled rather than provisional. The open question from Session
+20 and the one left at the end of Session 22 both close here.

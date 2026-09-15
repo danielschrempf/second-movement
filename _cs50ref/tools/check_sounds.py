@@ -13,8 +13,8 @@ reports where every cue lands.
 
     python3 check_sounds.py [path/to/pet_face.c]
 
-Exits non-zero if a cue is unreachable, points at a missing sound, or fires
-faster than its own sound can play.
+Exits non-zero if a cue is unreachable, points at a missing sound, fires faster
+than its own sound can play, or lands on the same tick as another cue.
 """
 import re
 import sys
@@ -235,6 +235,61 @@ def main():
                 check("%s: repeats leave room for the sound" % label, gap >= need,
                       "%d fires, closest %d ticks apart, sound is %.1f ticks"
                       % (len(at), gap, need))
+
+    print()
+    # Cues that share an animation share one buzzer. Starting a sound aborts
+    # whatever is playing -- watch_buzzer_play_sequence_with_volume calls
+    # watch_buzzer_abort_sequence as its first act, and every pet sound carries
+    # BUZZER_PRIORITY_BUTTON, so no pet sound ever loses to another. Cutting one
+    # short is fine and deliberate: a sound only has to *start* on its visual
+    # moment, and handing over mid-phrase is how a scene changes gear.
+    #
+    # Two cues on the SAME tick is not fine. _pet_fire_cues walks the table in
+    # order within a single frame, so both fire in one tick and the earlier is
+    # aborted before it has sounded at all. It does not play shortened; it
+    # vanishes. Nothing about the art looks wrong when this happens, which is
+    # why it is checked here rather than noticed on the wrist.
+    for anim, fname, loops, cname in anims:
+        if not cname or cname not in cues or not fname or fname not in frames:
+            continue
+        if len(cues[cname]) < 2:
+            continue
+        poses = frames[fname]
+        total = sum(h for _, h in poses)
+
+        timeline = []
+        for cue in cues[cname]:
+            label = cue[0].replace("PET_SOUND_", "").lower()
+            for tick in fires(cue, poses, loops):
+                timeline.append((tick, label, sounds.get(cue[0])))
+        timeline.sort(key=lambda row: row[0])
+
+        ticks = [row[0] for row in timeline]
+        shared = sorted({t for t in ticks if ticks.count(t) > 1})
+
+        # How long each sound holds the buzzer before the next cue takes it.
+        clipped = []
+        for i, (tick, label, dur) in enumerate(timeline):
+            if i + 1 < len(timeline):
+                room = timeline[i + 1][0] - tick
+            elif loops:
+                room = total - tick + timeline[0][0]
+            else:
+                continue            # a one-shot's last sound runs past the art
+            if dur and room < dur / PER_TICK:
+                clipped.append("%s gets %d of its %.1f ticks"
+                               % (label, room, dur / PER_TICK))
+
+        order = list(dict.fromkeys(label for _, label, _ in timeline))
+        where = ", ".join("%s %s" % (label, [t for t, l, _ in timeline if l == label])
+                          for label in order)
+        if shared:
+            detail = "%s -- two land on tick %s, and the earlier never sounds" % (where, shared)
+        elif clipped:
+            detail = "%s; %s, handing over on the beat" % (where, "; ".join(clipped))
+        else:
+            detail = where
+        check("%s: no two cues share a tick" % anim.lower(), not shared, detail)
 
     print()
     # Every animation but NONE must have art. pet_face.c used to carry a name

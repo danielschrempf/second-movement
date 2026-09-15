@@ -675,7 +675,7 @@ python3 check_economy.py
 | `check_layers.c` | The procedural cells are off limits to every layer, the two layers overlap only in cell 9 where that is intended, and a rogue frame gets clipped | The region map or `_pet_layers` changes |
 | `check_awake_time.c` | Waking-seconds accounting is monotonic and additive over 400 spans, and handles whole nights and both day boundaries. Prints time-to-death from four start hours | `PET_HOUR_WAKE`/`PET_HOUR_SLEEP` or the decay rate change |
 | `check_balance.c` | A week of care at different visit rates and feed timings, printing the mood trajectory, plus a pair of visits inside one sitting for the settling cooldown | Any tunable in the buff/debuff block changes |
-| `check_sounds.py` | Every cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is unreachable — whether it is cued or played directly — and every animation has art | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_sounds.py` | Every cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no two cues on one animation land on the same tick, no sound is unreachable — whether it is cued or played directly — and every animation has art | **Any animation is redrawn**, or a cue or sound is edited |
 | `check_showcase.py` | The reel visits every entry in order and wraps, and from every position in it, leaving by any route puts the live pet back on screen showing its real mood. Prints the lap time | The showcase, `_pet_layer_tick` or `_pet_rest` change, or the reel is reordered |
 | `check_economy.py` | Every figure in §3 above still matches the tunables it was derived from | Any buff, debuff, cap or cooldown changes, or §3 is reworded |
 
@@ -692,6 +692,16 @@ tumbles through it, so the slide fired twice and the second firing restarted a
 9-tick chromatic ramp partway down, cutting it off. `once` in the cue table
 suppresses the repeat, and the report keeps the choice visible in case a redraw
 ever makes the second edge meaningful.
+
+It also checks cues against each other. The buzzer is monophonic — one piezo,
+one sequence pointer, and starting a sound calls `watch_buzzer_abort_sequence`
+first — so cues on one animation take it from each other. Being cut short is
+fine, and deliberate: a sound only has to *start* on its visual moment. Two cues
+on the **same tick** is not, because `_pet_fire_cues` walks the table in order
+within a frame and the earlier one is aborted before it sounds at all. It does
+not play shortened, it vanishes, and the art still looks right. Nothing collides
+today — the closest pair is the eat, whose gulp gets one tick before the first
+chew and needs 0.75 — but a redraw is exactly what would change that.
 
 `check_economy.py` is wired to both ends — it reads the `#define`s out of
 `pet_face.h` and the printed numbers out of §3, and fails when they disagree, so
@@ -750,8 +760,9 @@ put it, so keep the alignment identical between files. If it shifts, `CELLS` in
 scratch directory on `/mnt/d` where both sides can see it. On the Mac everything
 is native.
 
-Then run `check_sounds.py` — cues are attached to frames, and a redraw can move
-the moment a sound was written for.
+Then run `check_sounds.py` — cues are attached to frames, so a redraw can move
+the moment a sound was written for, and it can also collapse two cues onto one
+frame, which silences the first outright.
 
 ---
 
