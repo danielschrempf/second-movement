@@ -1980,3 +1980,102 @@ removed field and fitted in padding that was already there, so
 on the Mac, GCC 15.3), plus **128** for the chord, and **12 bytes of RAM** —
 `sizeof(pet_state_t)` 84 → 96, being nine bytes of new state and three of the
 padding they fell into. The face now stands at 6,704 bytes, 2.73% of the budget.
+
+---
+
+## Session 21 — the same work, written once
+
+An audit pass, at Dan's asking: the game is balanced the way he wants and the
+face is well inside its budget, so the question was only whether anything is
+said twice or gated twice. Four things were. None of them changes behaviour, and
+together they give back **104 bytes**.
+
+### The showcase stays at 1.5 s
+
+First, the question that prompted this. Moving the reel's toggle down to LIGHT's
+0.5 s press would delete one `case` label and move one call — about two lines,
+and it would cost something real, because a feed press held a moment too long
+would start the reel. The 1.5 s hold stays. The dead zone between 0.5 s and
+1.5 s is not paying for anything, so it may as well be the hidden thing Dan
+liked about it.
+
+### Decay was written twice
+
+Passive decay and an unswept poo are the same mechanism at their own rates on
+their own clocks, and `_pet_catch_up` spelled both out: take the waking seconds
+since the last charge, add the carried residual, divide, keep the remainder,
+move the clock up, clamp, apply. Nine lines each, differing in three
+identifiers. They are now one `_pet_charge_decay` taking a clock, a residual and
+a rate.
+
+Which puts a subtlety in one place instead of two. The `if (qt > PET_QT_DEAD)`
+clamp reads as redundant, because `_pet_add_qt` already pins the result to
+`0..PET_QT_DEAD` — but the argument is `int16_t` and `qt` is `uint32_t`, so
+without the clamp a pet left alone for a few years would wrap the cast negative
+and come back *healed*. The helper says so.
+
+### The sitting was computed three times
+
+`_pet_feed_tick`, `_pet_barf_scene` and `_pet_settling` each read the clock, ran
+`_pet_meal_segment` on the hour, and compared a day and a segment as two
+separate fields. Neither half means anything alone — a segment number repeats
+every day — so they are now one `_pet_sitting_now()` returning both packed into
+a `uint16_t`, and "still the same sitting" is one comparison instead of two.
+`fed_day`/`fed_seg` and `barf_day`/`barf_seg` become `fed_sitting` and
+`barf_sitting`. Zero is still "no sitting", since a real day is 1..31.
+
+### Death was handled in three places
+
+`_pet_rest` knows what a dead pet needs: the tombstone, the accelerometer off,
+the knell exactly once. `_pet_enter` had its own copy of all of it, with a
+comment explaining that it skips `_pet_rest` and so must do these things itself.
+It calls `_pet_rest` now. The behaviour is identical because `_pet_enter`
+already seeds `shown_mood` before the branch, which is what keeps the mood step
+silent on a visit that opens on a change you were not there for.
+
+There are still three ways to ask whether the pet is dead — `scene ==
+PET_SCENE_DEAD`, `_pet_mood(s) == PET_MOOD_DEAD`, `quarter_tics >= PET_QT_DEAD`
+— and they are deliberately not collapsed, because they answer different
+questions: what is on screen, what the counter says, and whether the arithmetic
+should run at all. They can disagree for up to `PET_NIGHT_AWAKE_SECONDS`: a poke
+that kills a pet at night leaves the scene at `NIGHT_AWAKE` until the settle
+timer reaches `_pet_rest`. That is not a bug worth fixing — the pet grumbles,
+then dies, which reads better than dying mid-grumble.
+
+### Smaller things
+
+`free_to_play` was a six-line `#if`/`#else` producing a `bool` in one build and
+a `const bool` in the other, to avoid reading a field that is always false when
+`PET_SHOWCASE` is 0. The field is in the struct either way; the test is now
+inline and the preprocessor block is gone.
+
+`_pet_layer_tick` had `a->frames ? a->count : 1`, a fallback it cannot reach:
+`PET_ANIM_NONE` returns two lines above and is the only animation without
+frames. The same fallback in `_pet_frame_hold` *is* reachable, through
+`_pet_layer_play(l, PET_ANIM_NONE)` which is how a layer is cleared, and its
+comment claimed to be about "label-only animations" — a kind of animation that
+does not exist. Both now say what they are.
+
+`_pet_draw` indexed `_pet_anims` and then decided whether to skip the layer.
+Harmless, since `PET_ANIM_NONE` is a real table entry, but the wrong way round.
+
+### What was left alone
+
+The animation queue holds four and never more than two — `_pet_enter` is the
+only caller, queueing a wake and a mood. Collapsing it to a single slot saves
+nothing in RAM, since the struct pads to 96 either way, and would make any
+future three-step scene a rewrite rather than an extra `_pet_queue_anim`.
+
+`_pet_invalidate` is a one-line wrapper around a flag, kept because it names the
+intent at both call sites.
+
+`_pet_enter` still reads the clock twice, once directly and once inside
+`_pet_catch_up`. Threading it through would change two signatures to save one
+RTC read per activate.
+
+    139,024 -> 138,920 text, data and bss unmoved
+    sizeof(pet_state_t) 96, unchanged
+
+All six harnesses pass unchanged, which is the point of the exercise: the only
+visible difference is `check_sounds.py` now reporting the death knell as played
+by `_pet_rest` alone rather than by `_pet_rest` and `_pet_enter`.

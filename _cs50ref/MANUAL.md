@@ -848,8 +848,8 @@ The classic build is byte-identical under all three.
 | Animations | 14, decoded from GIF exports |
 | Sounds | 19 — 13 cued to frames, 6 played directly — at `BUZZER_PRIORITY_BUTTON` |
 | Muting | Follows the watch's `BTN beep` setting (`N` = silent) |
-| Flash | 139,024 text + 2,632 data = 141,656 (58% of 245,760) |
-| — of which is this face | **6,704 bytes**, 2.73% of the budget — see §16 |
+| Flash | 138,920 text + 2,632 data = 141,552 (58% of 245,760) |
+| — of which is this face | **6,600 bytes**, 2.69% of the budget — see §16 |
 | RAM | **96 bytes** of context + 8 bytes of Movement's per-face arrays |
 
 ---
@@ -862,11 +862,11 @@ for the same source, per the gotcha in `CLAUDE.md`):
 
 | | text | data | bss |
 | --- | --- | --- | --- |
-| With the pet | 139,024 | 2,632 | 4,608 |
+| With the pet | 138,920 | 2,632 | 4,608 |
 | Without | 132,472 | 2,488 | 4,600 |
-| **The face** | **+6,552** | **+144** | **+8** |
+| **The face** | **+6,448** | **+144** | **+8** |
 
-**6,704 bytes of flash**, 2.73% of the 245,760 available, leaving ~102 KB free.
+**6,600 bytes of flash**, 2.69% of the 245,760 available, leaving ~102 KB free.
 Where it goes:
 
 | | bytes |
@@ -889,6 +889,12 @@ settling the stomach cost **472** between them, all of it in `text`, and moving
 the hug onto a two-button chord a further **128** — that one deleting a state
 field and buying back its own space in padding, so RAM did not move. None was
 worth economising on.
+
+A tightening pass then gave **104** of it back, by finding the same work written
+twice: the passive decay and the poo's decay are one accumulator at two rates
+(`_pet_charge_decay`), the sitting a moment falls in was computed in three
+places (`_pet_sitting_now`), and `_pet_enter` kept its own copy of everything
+`_pet_rest` already does for a dead pet. Nothing about the game changed.
 
 **104 bytes of RAM.** `sizeof(pet_state_t)` is 96 — nine bytes of it added by the
 settling clock and the tap counter, three more by the padding they fell into —

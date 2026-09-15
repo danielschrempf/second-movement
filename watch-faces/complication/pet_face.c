@@ -583,6 +583,15 @@ static uint8_t _pet_meal_segment(uint8_t hour) {
     return seg < PET_FEED_SEGMENTS ? seg : PET_FEED_SEGMENTS - 1;
 }
 
+// The sitting we are in now: the local day and which of that day's sittings,
+// packed together because neither half means anything alone -- a segment number
+// repeats every day, and a day holds three of them. Packed, "same sitting" is
+// one comparison, and zero is no sitting at all, since a real day is 1..31.
+static uint16_t _pet_sitting_now(void) {
+    watch_date_time_t local = movement_get_local_date_time();
+    return (uint16_t) ((local.unit.day << 8) | _pet_meal_segment(local.unit.hour));
+}
+
 static pet_mood_t _pet_mood(const pet_state_t *s) {
     if (s->quarter_tics >= PET_QT_DEAD)     return PET_MOOD_DEAD;
     if (s->quarter_tics >= PET_QT_ANGRY)    return PET_MOOD_ANGRY;
@@ -700,8 +709,8 @@ static void _pet_draw(pet_state_t *s) {
     uint8_t flags = 0;
 
     for (uint8_t l = 0; l < PET_LAYER_COUNT; l++) {
-        const pet_anim_t *a = &_pet_anims[s->layer[l].anim];
         if (s->layer[l].anim == PET_ANIM_NONE) continue;
+        const pet_anim_t *a = &_pet_anims[s->layer[l].anim];
         const pet_frame_t *f = &a->frames[s->layer[l].frame];
         const pet_layer_def_t *d = &_pet_layers[l];
         for (uint8_t p = 0; p < 10; p++) fb[p] |= f->seg[p] & d->seg[p];
@@ -751,7 +760,8 @@ static void _pet_showcase_advance(pet_state_t *s);
 #endif
 
 static uint8_t _pet_frame_hold(const pet_anim_t *a, uint8_t frame) {
-    // Label-only animations show for one second.
+    // PET_ANIM_NONE is the empty layer and has no frames; a second is an
+    // arbitrary hold for a blank one, since nothing watches it advance.
     return a->frames ? a->frames[frame].hold : PET_ANIM_HZ;
 }
 
@@ -859,8 +869,10 @@ static void _pet_layer_tick(pet_state_t *s, pet_layer_id_t l) {
     pet_layer_t *L = &s->layer[l];
     if (L->anim == PET_ANIM_NONE) return;
 
+    // PET_ANIM_NONE returned above and is the only animation without frames,
+    // so a->frames is good from here down.
     const pet_anim_t *a = &_pet_anims[L->anim];
-    uint8_t count = a->frames ? a->count : 1;
+    uint8_t count = a->count;
     bool loop_here = a->loop;
     bool queued = (l == PET_LAYER_CHARACTER) && (s->queue_len > 0);
 
@@ -1098,6 +1110,23 @@ static void _pet_showcase_step_mood(pet_state_t *s) {
 // 5. Simulation
 // ============================================================================
 
+// Charge the decay that accrued between *since and now, in waking seconds, and
+// move *since up to now. The leftover seconds stay in *residual rather than
+// being rounded away, so opening the face often cannot cheat the clock.
+//
+// Passive decay and an unswept poo are the same mechanism at their own rates,
+// on their own clocks; the clamp is what keeps the int16_t cast honest when a
+// pet has been left for months.
+static void _pet_charge_decay(pet_state_t *s, uint32_t *since, uint16_t *residual,
+                              uint32_t now, uint32_t seconds_per_qt) {
+    uint32_t awake = _pet_awake_between(*since, now) + *residual;
+    uint32_t qt = awake / seconds_per_qt;
+    *residual = (uint16_t) (awake % seconds_per_qt);
+    *since = now;
+    if (qt > PET_QT_DEAD) qt = PET_QT_DEAD;
+    if (qt > 0) _pet_add_qt(s, (int16_t) qt);
+}
+
 // Land a poo whose wall-clock countdown has expired; one at a time. Called from
 // the tick as well as from the catch-up, so one coming due while the face is on
 // screen is noticed.
@@ -1128,16 +1157,9 @@ static void _pet_catch_up(pet_state_t *s) {
     if (now < s->last_play_buff_ts) s->last_play_buff_ts = 0;
 
     if (s->quarter_tics < PET_QT_DEAD) {
-        // Passive: +1 tic per 6 h of waking time, with the leftover seconds
-        // carried in awake_residual rather than rounded away.
-        uint32_t awake = _pet_awake_between(s->last_update_ts, now) + s->awake_residual;
-        uint32_t qt = awake / PET_SECONDS_PER_QT;
-        s->awake_residual = (uint16_t) (awake % PET_SECONDS_PER_QT);
-        s->last_update_ts = now;
-        if (qt > 0) {
-            if (qt > PET_QT_DEAD) qt = PET_QT_DEAD;
-            _pet_add_qt(s, (int16_t) qt);
-        }
+        // Passive: +1 tic per 6 h of waking time.
+        _pet_charge_decay(s, &s->last_update_ts, &s->awake_residual,
+                          now, PET_SECONDS_PER_QT);
 
         // +1 tic per missed wall-clock day without eating, on top of passive
         // decay.
@@ -1150,16 +1172,11 @@ static void _pet_catch_up(pet_state_t *s) {
 
         _pet_poo_arrives(s, now);
 
-        // An unswept poo keeps adding tics, in waking time like passive decay.
+        // An unswept poo charges the same way on its own clock, doubling the
+        // rate until it is swept.
         if (s->has_poo) {
-            uint32_t poo_awake = _pet_awake_between(s->poo_since_ts, now) + s->poo_residual;
-            uint32_t pqt = poo_awake / PET_POO_SECONDS_PER_QT;
-            s->poo_residual = (uint16_t) (poo_awake % PET_POO_SECONDS_PER_QT);
-            s->poo_since_ts = now;
-            if (pqt > 0) {
-                if (pqt > PET_QT_DEAD) pqt = PET_QT_DEAD;
-                _pet_add_qt(s, (int16_t) pqt);
-            }
+            _pet_charge_decay(s, &s->poo_since_ts, &s->poo_residual,
+                              now, PET_POO_SECONDS_PER_QT);
         }
     }
 
@@ -1223,10 +1240,8 @@ static void _pet_barf_scene(pet_state_t *s) {
     // Whatever brought it on, the stomach needs settling before it will take
     // food again. Recording the sitting is what lets the next one cut that
     // short; see PET_BARF_SETTLE_SECONDS.
-    watch_date_time_t local = movement_get_local_date_time();
     s->barf_until_ts = _pet_now() + PET_BARF_SETTLE_SECONDS;
-    s->barf_day = local.unit.day;
-    s->barf_seg = _pet_meal_segment(local.unit.hour);
+    s->barf_sitting = _pet_sitting_now();
     // Whatever was still on the plate goes with it. A play barf can land while
     // pips are queued, and they would otherwise sit there to be eaten by the
     // next feed, hours later.
@@ -1243,9 +1258,7 @@ static void _pet_barf_scene(pet_state_t *s) {
 // ends it early -- a new meal window is a clean stomach, whichever came first.
 static bool _pet_settling(pet_state_t *s) {
     if (s->barf_until_ts == 0) return false;
-    watch_date_time_t local = movement_get_local_date_time();
-    if (s->barf_day != local.unit.day) return false;
-    if (s->barf_seg != _pet_meal_segment(local.unit.hour)) return false;
+    if (s->barf_sitting != _pet_sitting_now()) return false;
     return _pet_now() < s->barf_until_ts;
 }
 
@@ -1300,14 +1313,12 @@ static void _pet_feed_tick(pet_state_t *s) {
 
     // Eat one pip.
     uint32_t now = _pet_now();
-    watch_date_time_t local = movement_get_local_date_time();
-    uint8_t seg = _pet_meal_segment(local.unit.hour);
     // A new sitting starts the count and the nutrition over. Checked here rather
     // than in the catch-up so a sitting that turns over while the face is open
     // is noticed too.
-    if (s->fed_day != local.unit.day || s->fed_seg != seg) {
-        s->fed_day = local.unit.day;
-        s->fed_seg = seg;
+    uint16_t sitting = _pet_sitting_now();
+    if (s->fed_sitting != sitting) {
+        s->fed_sitting = sitting;
         s->pips_this_seg = 0;
         s->seg_buff_qt = 0;
     }
@@ -1541,14 +1552,11 @@ static void _pet_enter(pet_state_t *s) {
     // closed. You were not there for it, so the pet opens without a step.
     s->shown_mood = (uint8_t) mood;
     if (mood == PET_MOOD_DEAD) {
-        // Hold the tombstone until resurrected. This path skips _pet_rest, so it
-        // turns the accelerometer down itself -- and tolls for itself, once:
-        // the scene survives the visit, so coming back to the same tombstone is
-        // quiet.
-        if (s->scene != PET_SCENE_DEAD) _pet_play_sound(s, PET_SOUND_DEATH);
-        s->scene = PET_SCENE_DEAD;
-        _pet_set_tap_detection(s, false);
-        _pet_start_anim(s, PET_ANIM_DEAD);
+        // Everything a dead pet needs is _pet_rest's business already: the
+        // tombstone, the accelerometer off, and the knell exactly once, since
+        // the scene survives the visit and coming back to the same grave is
+        // quiet. Nothing is queued behind it.
+        _pet_rest(s);
         return;
     }
     _pet_set_tap_detection(s, true);
@@ -1612,15 +1620,10 @@ static void _pet_tick(pet_state_t *s, uint8_t subsecond) {
         // Once a second is enough for a twelve-hour countdown.
         _pet_poo_arrives(s, _pet_now());
     }
-#if PET_SHOWCASE
-    // The showcase owns the screen while it is up.
-    bool free_to_play = !s->showcase_on;
-#else
-    const bool free_to_play = true;
-#endif
-    // A poo that landed unwatched gets its scene once the pet is idle and free.
-    // Asleep or dead there is no scene to play, so the pile just goes down.
-    if (s->poo_pending && free_to_play) {
+    // A poo that landed unwatched gets its scene once the pet is idle and the
+    // showcase is not holding the screen. Asleep or dead there is no scene to
+    // play, so the pile just goes down.
+    if (s->poo_pending && !s->showcase_on) {
         if (s->scene == PET_SCENE_IDLE && !_pet_anim_busy(s)) {
             s->poo_pending = false;
             _pet_start_anim(s, PET_ANIM_POO);   // and _pet_rest leaves the pile

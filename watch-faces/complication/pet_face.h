@@ -482,10 +482,11 @@ typedef struct {
     uint16_t poo_residual;
     uint32_t last_play_buff_ts; // the play cooldown runs from here
     // A barf shuts the kitchen until here -- or until the sitting it happened
-    // in turns over, which is what barf_day/barf_seg are for.
+    // in turns over, which is what barf_sitting is for. Both are _pet_sitting_now
+    // values: a local day and one of its sittings, packed, so "still the same
+    // sitting" is one comparison.
     uint32_t barf_until_ts;     // 0 = the pet has never been sick
-    uint8_t  barf_day;
-    uint8_t  barf_seg;
+    uint16_t barf_sitting;
     uint8_t  hugs_today;
     uint8_t  hug_day;           // local day-of-month hugs_today belongs to
     // The current sitting, and what has been eaten in it. seg_buff_qt is the eat
@@ -494,8 +495,7 @@ typedef struct {
     // there is nothing left to.
     uint8_t  pips_this_seg;
     uint8_t  seg_buff_qt;
-    uint8_t  fed_day;           // local day-of-month the two above belong to
-    uint8_t  fed_seg;           // ... and which of that day's sittings
+    uint16_t fed_sitting;       // the sitting the two above belong to
     uint8_t  woke_day;          // local day-of-month the wake animation last played
 
     // -- Per-visit state. Reset every activate.
