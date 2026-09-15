@@ -48,10 +48,19 @@ def read_exit_rests(src):
     assumed: the escape cases at the top of pet_face_loop must route through a
     helper that calls _pet_rest. Setting showcase_on = false inline does not
     count -- that is the bug this check exists to catch.
+
+    The escape switch is the first of the two in pet_face_loop, so the second
+    one bounds it. Matched loosely: brace style is not what this is testing, and
+    a reformat that moves the brace to its own line should not read as a bug.
     """
     loop = src[src.index("bool pet_face_loop"):]
-    escape = loop[:loop.index("switch (event.event_type) {",
-                              loop.index("switch (event.event_type) {") + 1)]
+    switches = [m.start() for m in
+                re.finditer(r"switch\s*\(\s*event\.event_type\s*\)\s*\{", loop)]
+    if len(switches) < 2:
+        raise SystemExit("check_showcase: expected two switches in "
+                         "pet_face_loop, found %d -- has it been "
+                         "restructured?" % len(switches))
+    escape = loop[:switches[1]]
     if "_pet_showcase_exit" not in escape:
         return False
     helper = re.search(r"static void _pet_showcase_exit\(.*?\n\}", src, re.S)
@@ -94,7 +103,8 @@ def read_anims(src):
     frames = check_sounds.read_frames(src)
     table = src[src.index("static const pet_anim_t _pet_anims"):]
     table = table[:table.index("\n};")]
-    table = table[table.index("= {") + 3:]
+    # Loosely, so the brace may sit on its own line: see read_exit_rests.
+    table = table[re.search(r"=\s*\{", table).end():]
     out = {}
     for row in re.finditer(
             r"\[PET_ANIM_(\w+)\]\s*=\s*\{.*?(PET_NO_FRAMES|PET_FRAMES\((\w+)\))\s*,"
