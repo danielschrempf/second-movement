@@ -86,19 +86,29 @@ Compile and run; each prints a pass/fail report and exits non-zero on failure.
 
 ```sh
 cc -O2 -o check_layers check_layers.c && ./check_layers
+python3 check_economy.py
 ```
 
 | | What it proves | Re-run when |
 | --- | --- | --- |
 | `check_layers.c` | The cells drawn from state — the buff sign and the food pips — are off limits to every layer, the two layers overlap only in cell 9 where that is intended, and a rogue frame gets clipped | The region map or `_pet_layers` changes |
 | `check_awake_time.c` | The waking-seconds accounting is monotonic and additive, and handles spans over whole nights and both day boundaries. Also prints how long neglect takes to kill the pet | `PET_HOUR_WAKE` / `PET_HOUR_SLEEP` or the decay rate change |
-| `check_balance.c` | Simulates a week of care at different check-in rates and feed timings, printing the mood trajectory | Any tunable in the buff/debuff block changes |
+| `check_balance.c` | Simulates a week of care at different check-in rates and feed timings, printing the mood trajectory, then a pair of visits inside one sitting for the settling cooldown | Any tunable in the buff/debuff block changes |
 | `check_sounds.py` | Every sound cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is left unreachable — cued or played directly — and every animation has a frame table | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_economy.py` | Every figure in [MANUAL.md](../MANUAL.md) §3 — each action's value, each daily ceiling, both barf totals and the visits table — still matches the tunables in `pet_face.h` | Any buff, debuff, cap or cooldown changes, or §3 is reworded |
 | `check_showcase.py` | The reel visits every entry in order for its allotted passes and wraps, and from every position in it, leaving by any route puts the live pet back on screen showing its real mood, with nothing on the floor it did not put there. Also prints how long a lap takes | The showcase, `_pet_layer_tick` or `_pet_rest` change, or the reel is reordered |
 
 `check_layers.c` and `check_awake_time.c` copy their constants from the
 firmware. They are **not** wired to it, so a tunable changed in `pet_face.h` will
 not fail these until it is changed here too — check both if a number moves.
+
+`check_economy.py` is the one that is wired to both ends. It evaluates the
+`#define`s out of `pet_face.h` and the printed numbers out of `MANUAL.md` §3, and
+fails when they disagree — so retuning a buff and forgetting the manual is caught
+rather than discovered later by a reader. It is worth running on its own for the
+report it prints, which is the whole economy on one screen. It earned its place
+the first time it ran: an earlier draft of §3 gave the over-shake barf as +1.0
+when `PET_BUFF_PLAY` makes it +0.75.
 
 `check_showcase.py` is half and half. It parses the animation table and the
 reel's running order out of `pet_face.c`, and it reads the one behaviour it is actually testing — whether

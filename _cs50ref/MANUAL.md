@@ -58,12 +58,13 @@ Long press is 0.5 s; the showcase holds in §10 are 1.5 s.
 | Press | Does | Notes |
 | --- | --- | --- |
 | `LIGHT` | Queue a meal | Up to four on the plate. Eating starts 3 s after the last press; only four stay down per sitting |
-| `LIGHT` hold | Hug | Four a day help; past the cap it is still hugged, it just gains nothing |
+| `LIGHT` + `ALARM` | Hug | Both buttons at once — an arm on each side. Fires on whichever lands second. Four a day help; past the cap it is still hugged, it just gains nothing |
+| `LIGHT` hold | — | Nothing. It is only the way to the 1.5 s hold below |
 | `ALARM` | Sweep | Clears the floor — both a pile and a puddle. A poo still on its way is left alone |
 | `ALARM` hold | Resurrect | Only while dead |
-| Shake | Play | Accelerometer tap detection. Each shake climbs a rung; 3 s deaf, then 5 s to shake again |
+| Shake | Play | Three taps inside 2 s, not one knock — see §5. Each shake climbs a rung; 3 s deaf, then 5 s to shake again |
 | `MODE` | Leave | Movement's default — next face |
-| `LIGHT`/`ALARM` hold 1.5 s | Showcase | Start or cancel the animation reel, or step the mood. `LIGHT` spends a hug getting there — see §10 |
+| `LIGHT`/`ALARM` hold 1.5 s | Showcase | Start or cancel the animation reel, or step the mood. Nothing is spent getting there — see §10 |
 
 In the simulator, which has no accelerometer, `ALARM` hold stands in for a shake
 while the pet is alive.
@@ -92,25 +93,85 @@ steps stay integer. Six tics (24 quarter tics) is fatal.
 | Angry | 4 – 5.75 | The same frown under a heavier scowl |
 | Dead | 6+ | A grave |
 
-### What moves it
+### What loses time
 
-| Event | Tics | Limit |
+The counter goes **up**. Six tics and the pet is dead.
+
+| What | Costs | Rate and limit |
 | --- | --- | --- |
-| Every 6 **waking** hours | +1 | Never stops |
-| A day without eating | +1 | Stacks on passive decay, capped at 6 days |
-| Mess left on the floor | +1 / 6 h | Doubles the passive rate until swept |
-| Disturbed at night | +0.25 | Every time |
-| Made sick by over-shaking | +0.25 | And the play buff is taken back |
-| Made sick by overfeeding | +0.25 | And the whole sitting's nutrition is taken back |
-| Eats one pip | −0.25 | Four pips per sitting, three sittings a day |
-| Hug | −0.25 | Four per calendar day |
-| Play | −0.5 | Once per 2 h cooldown |
+| **Passive decay** | **+1 per 6 waking hours** | Never stops, never pauses. The waking day is 15 hours, so this is **+2.5 tics every day**, whatever you do |
+| **A pile left on the floor** | **+1 per 6 waking hours** | On top of passive decay, so it *doubles* the rate for as long as it sits. Sweeping is free |
+| **A day without eating** | **+1 per 24 h** | Wall clock, not waking hours. Stacks on everything else. Capped at 6 tics caught up at once |
+| Waking it at night | +0.25 | Every time. Feed, hug or shake between 21:00 and 06:00 and the action is refused as well — you pay and get nothing |
+| Over-shaking to rung 3 | +0.25 | Plus the play buff handed back, if this session earned one: **+0.75** in total, or +0.25 if the cooldown meant there was no buff to return |
+| A fifth pip in one sitting | +0.25 | Plus the sitting's whole nutrition handed back: up to +1.25 in total |
+
+The first three run whether or not you are looking at the watch. **Leaving the
+face does not pause the game** — decay is reconstructed from timestamps the next
+time you open it. What stops is only the animation.
+
+### What gains time
+
+The counter goes **down**, and floors at zero. A surplus is not banked.
+
+| What | Gains | Most you can get in a day |
+| --- | --- | --- |
+| Eat one pip | −0.25 | 4 a sitting × 3 sittings = **−3.0** |
+| Hug | −0.25 | 4 per calendar day = **−1.0** |
+| Play | −0.5 | Once per 2 h cooldown, so 8 in a waking day = **−4.0** |
+
+That is everything. There is no other way to move the counter down, and nothing
+gains time on its own — an unattended pet only ever gets worse.
+
+### What costs nothing either way
+
+| What | |
+| --- | --- |
+| Sweeping | Always free. Works at night without waking the pet, and is silent on a clean floor |
+| A hug past the fourth | Still kissed, no buff |
+| Playing while the 2 h cooldown runs | Still plays along, no buff — but over-shaking it still barfs for +0.25 |
+| A feed refused while the stomach settles | Grumbles, nothing charged |
+| A tap burst that never reaches three | Nothing happened |
+| Resurrecting | Free, and puts the counter back to zero |
+| Changing face, or letting the watch time out | Nothing is charged for leaving — but see above, decay does not stop |
+
+### The arithmetic that matters
+
+**One complete visit is worth exactly −2.5 tics**: four pips (−1.0), four hugs
+(−1.0), one play (−0.5).
+
+**Passive decay is exactly +2.5 tics a day.**
+
+Those two numbers are equal, which is the whole game. One full visit a day breaks
+even *on paper* and loses in practice, because the meal you just fed drops a pile
+twelve hours later that charges the rate all over again until you sweep it.
+
+A second and third visit add only pips and plays — the hug cap is spent on the
+first:
+
+| Visits a day | Pips | Hugs | Plays | Gain |
+| --- | --- | --- | --- | --- |
+| 1 | 4 | 4 | 1 | **−2.5** |
+| 2 | 8 | 4 (spent) | 2 | **−4.0** |
+| 3 | 12 | 4 (spent) | 3 | **−5.5** |
+
+all against +2.5 of passive decay plus whatever is on the floor. Those rows assume
+you feed a full plate at *every* visit, which is the ceiling — §8 runs the more
+realistic case of feeding at one visit of the day, over a simulated week, and
+there **when** you feed matters as much as how often: three visits hold level
+unless the meal is first thing in the morning, two struggle or die depending on
+the same choice, and one visit a day dies by the third day.
 
 **Only waking seconds count.** Nothing decays between 21:00 and 06:00. The
 accounting is exact rather than approximate — `_pet_awake_between` converts any
 two timestamps into elapsed waking seconds, handling spans over whole nights and
 both day boundaries, and leftover seconds carry in a residual so that opening the
 face often cannot round decay away.
+
+The one exception is the missed-feed clock, which is wall clock: a full day
+without eating costs a tic whether that day was spent awake or asleep. A pip that
+comes straight back up still counts as having eaten for *that* clock — the pet
+took the food, it just did not keep it.
 
 ---
 
@@ -147,6 +208,32 @@ sweep. Anything still on the plate is thrown out with it — the meal is over.
 again before the next sitting barfs again; by then there is no nutrition left to
 return and it costs only the +0.25. The pet is done eating until 11:00.
 
+### Settling the stomach
+
+Being sick shuts the kitchen. For **30 minutes after any barf — or until the next
+sitting, whichever comes first** — a `LIGHT` press is refused outright: the pet
+grumbles, the bell and the plate never appear, and nothing at all is charged. The
+barf that shut the kitchen has been paid for already.
+
+It is tied to the barf rather than to the meal, so **rough play closes the
+kitchen too**. Shaking the pet to the third rung (§5) and then offering it food
+gets the same refusal, which is the point — a pet that has just thrown up on the
+carpet is not hungry, whatever made it throw up.
+
+Thirty minutes is usually the binding half of that "whichever comes first": a
+sitting is five hours, so only a barf in the last half hour of one is cut short
+by the clock instead.
+
+**Settling does not hand the sitting back.** Past the cap the pet is done eating
+until the next sitting either way, so a settled stomach means the food will be
+*taken* — not that it will stay down. Wait out the 30 minutes after an overfeed
+and the next pip still comes straight back up, for the +0.25 and nothing more.
+What the cooldown buys is the difference between a pet that refuses you and one
+that will at least try, and after a *play* barf — where the sitting's cap is
+untouched — it buys a meal that keeps.
+
+Being resurrected clears the cooldown along with everything else.
+
 Because the plate holds four and a sitting allows four, one full plate per
 sitting is exactly the ceiling: you have to press deliberately past it to make
 the pet sick. Being resurrected empties the stomach, so a pet that died overfed
@@ -175,8 +262,49 @@ See §8.
 
 ## 5. Playing
 
-Shake to play. Each shake climbs one rung of a three-rung ladder, and between
-rungs the pet stops listening:
+### What counts as a shake
+
+The accelerometer reports single taps in hardware, and one of those is a low bar
+— a knock against a desk, a brisk arm swing, a hand going into a pocket. Each
+used to be a whole rung of the ladder, which is why the pet kept interrupting
+itself: ordinary arm movement was enough to shove a meal or a settling mood aside
+and put `PLAY 1` on screen.
+
+So a tap is no longer a shake. **Three of them are**, all inside 2 s of the
+first, and no two closer together than a quarter second:
+
+| Tunable | Value | Means |
+| --- | --- | --- |
+| `PET_SHAKE_TAPS` | 3 | taps that make a shake … |
+| `PET_SHAKE_WINDOW_SECONDS` | 2 | … all within this of the first … |
+| `PET_SHAKE_GAP_TICKS` | 2 (0.25 s) | … and no two inside this |
+| `PET_SHAKE_THRESHOLD` | 8 (500 mg) | how hard one tap has to be |
+
+The window runs from the first tap and is **not** extended by the ones after it
+— it is a burst, not a slow drum — so short of three the count expires and
+nothing happened.
+
+The gap is what rejects a single hard knock. The hardware's own quiet period is
+around 60 ms, so one impulse ringing out can report several taps in a row;
+everything inside the gap is read as that same knock still sounding.
+
+Because three are wanted, each can be easier to land than Movement's default, so
+the face writes its own Z-axis threshold after enabling detection — 500 mg
+against Movement's 750. Deliberate tapping then registers reliably and the count
+does the rejecting. Nothing leaks to other faces: every face that wants taps
+configures detection on its own activate, and disabling zeroes the register on
+the way out.
+
+**This is not the tap counting that was abandoned** further down. That build let
+the number of taps pick the rung, which measured how hard the watch was shaken;
+this one only decides whether a shake happened at all. The ladder below is still
+paced by the clock, and one burst — however many interrupts the hardware makes of
+it — still climbs exactly one rung.
+
+### The ladder
+
+Each shake climbs one rung of a three-rung ladder, and between rungs the pet
+stops listening:
 
 | Rung | Reached by | Shows |
 | --- | --- | --- |
@@ -191,7 +319,8 @@ ends where it stands.
 
 Reaching the third rung barfs — the buff is returned and a further 0.25 tic
 added, so over-shaking is strictly worse than not playing — and leaves a puddle
-in cell 9 to sweep. The barf serves out one more deaf period before the session
+in cell 9 to sweep. It also shuts the kitchen for half an hour, like any other
+barf; see §4. The barf serves out one more deaf period before the session
 ends, for the same reason the rungs have one: the tail of the shake that caused
 it would otherwise arrive as a fresh session and replace the barf animation with
 `PLAY 1`, while the puddle and the debuff had already landed.
@@ -240,8 +369,10 @@ on how much of that window is night, which costs it nothing.
 ## 8. Balance
 
 Passive decay alone is 1 tic per 6 waking hours, and the waking day is fifteen
-hours, so the pet needs exactly **2.5 tics of care a day** to hold level. From
-`check_balance.c`, quarter tics at the end of each of seven days:
+hours, so the pet needs exactly **2.5 tics of care a day** to hold level — which
+is exactly what one complete visit is worth. §3 has the per-action breakdown;
+this section is what that adds up to over a week. From `check_balance.c`, quarter
+tics at the end of each of seven days:
 
 ```text
                                      d1 d2 d3 d4 d5 d6 d7
@@ -257,6 +388,21 @@ hours, so the pet needs exactly **2.5 tics of care a day** to hold level. From
 1/day, 8 pips at one sitting          4 24 24 24 24 24 24   DEAD
 no care at all                        9 23 24 24 24 24 24   DEAD
 ```
+
+The settling cooldown, measured as a pair of visits inside one sitting. The
+control calls at the same moment without feeding, so the decay in the gap can be
+subtracted from the row below it:
+
+```text
+after an overfeed at 08:00 (quarter tics before -> after)
+second plate at 08:20, still settling         3 ->  3
+no second plate at 09:00 (control)            3 ->  4
+second plate at 09:00, settled                3 ->  5
+```
+
+Refused, it costs nothing. Accepted, it costs the +0.25 barf penalty on top of
+the 0.25 that decayed anyway — the sitting's cap being spent either way. That is
+the cooldown doing exactly what §4 claims and no more.
 
 Three visits a day with an evening meal hold around 1 tic. Two a day either die
 or struggle; one a day dies on day three. A visit worth making is all three
@@ -391,6 +537,12 @@ which is what makes two passes enough to read them. Entries run 4–8 s each.
 Stepping the mood is still the fast way to see the five expressions on the live
 pet, death and resurrection included.
 
+**The reel is deaf.** Starting it disables tap detection at the hardware and
+every exit turns it back on, so being handled while it plays cannot cut it short
+or set the pet playing underneath it. A reel is a performance and watching one
+usually means holding the watch. It saves the accelerometer's 400 Hz
+high-performance mode for the duration as well. The buttons still cancel it.
+
 While the reel is up, a forced loop means `_pet_anim_busy` stays true, so the
 scene timers that wait on it — feeding and the play ladder — pause for as long as
 it runs. That is left as it is: a queued meal already sits through a 3 s settle
@@ -415,20 +567,19 @@ Which entry the reel is on is kept in `showcase_step`, and how many passes of it
 have gone by in `showcase_plays`. The pass is counted at the one moment an
 animation ends — which, for a loop, only exists because the showcase forces it.
 
-A third field, `showcase_interrupted`, is what the `LIGHT` hold toggles against.
-It has to be: the 0.5 s long press arrives on the way to every 1.5 s hold, and it
-hands the screen back so the hug can show its kiss — so by the time the hold
-lands, `showcase_on` is already false and cannot say whether the reel was
-running. `showcase_interrupted` remembers that the screen was taken from a
-running reel, so the hold behind it cancels rather than starting over.
+**The toggle tests `showcase_on` and nothing else**, which was not always
+possible. When the hug sat on `LIGHT`'s 0.5 s press, that press arrived on the
+way to every 1.5 s hold and handed the screen back so the kiss could show — so by
+the time the hold landed, `showcase_on` had already been cleared by the very
+gesture trying to read it. That needed a second field to remember what the first
+had forgotten, and that field in turn had to be cleared on
+`EVENT_LIGHT_BUTTON_DOWN` rather than on the release, because Movement drains
+each batch of pending events in enum order and `EVENT_LIGHT_LONG_UP` sorts
+*before* `EVENT_LIGHT_REALLY_LONG_PRESS` — so a release landing in the same batch
+as the 1.5 s timeout would wipe the note a moment before the hold read it.
 
-It is cleared on `EVENT_LIGHT_BUTTON_DOWN` rather than on the release, which is
-what makes it airtight. Movement drains a batch of pending events in enum order,
-and `EVENT_LIGHT_LONG_UP` sorts *before* `EVENT_LIGHT_REALLY_LONG_PRESS` — so a
-release landing in the same batch as the 1.5 s timeout would wipe the note a
-moment before the hold read it, and the button would start a reel where it meant
-to cancel one. `EVENT_LIGHT_BUTTON_DOWN` sorts first and always begins the press,
-so the note can only be set and read inside a single press.
+Moving the hug to the chord deleted all of it: the field, the ordering hazard,
+and the reasoning holding them together. `LIGHT`'s 0.5 s press now does nothing.
 
 Leaving the showcase always goes through `_pet_showcase_exit`, which calls
 `_pet_rest`. Clearing `showcase_on` on its own is not enough: it only stops
@@ -438,26 +589,28 @@ up for good, and you could walk away from the showcase with a healthy pet stuck
 confused, snoring at noon, or dead. `check_showcase.py` asserts you can always
 get back, from every position in the reel and by every route out.
 
-A short press, a sweep or a shake cancels the reel too, and the next hold starts
-it again from the top.
+A short press, a sweep or a hug cancels the reel too, and the next hold starts it
+again from the top. A shake does not — the reel is deaf, and the taps never
+arrive.
 
-Both holds fire their 0.5 s long-press on the way past, since Movement delivers
-that first. The short actions do **not** fire — `EVENT_*_BUTTON_UP` only arrives on a
-release under half a second — so nothing is fed and nothing is swept. What does
-happen:
+The hug is the only one of those that is not in the escape switch. The chord
+fires on a `BUTTON_DOWN`, long before either release reaches the switch, so
+`_pet_chord` hands the screen back itself before it kisses. `check_showcase.py`
+reads that call out of the source rather than assuming it, because dropping it
+would play the kiss underneath a running reel and nothing else would notice.
 
-- **`LIGHT` spends a hug.** Starting the reel costs one of the four daily hugs
-  and −0.25 tic, and so does cancelling it. Two hugs for a session, rather than
-  one per animation — the old step-by-step control exhausted the daily cap four
-  presses into a walk.
+Both holds still fire their 0.5 s long-press on the way past, since Movement
+delivers that first. The short actions do **not** — `EVENT_*_BUTTON_UP` only
+arrives on a release under half a second — so nothing is fed and nothing is
+swept. What does happen:
+
+- **`LIGHT` does nothing.** Reaching the reel is free. It used to cost one of the
+  four daily hugs each way, two for a session, which was a fair trade but a
+  trade; moving the hug off that press removed the charge and the bookkeeping
+  above with it.
 - **`ALARM` does nothing** on hardware while the pet is alive. If it is dead, the
   0.5 s press resurrects it before you reach the mood step. In the simulator,
   which stands in for the accelerometer here, it plays with the pet instead.
-
-The hug is left in deliberately rather than refunded on escalation. It is a
-fair trade — a pet you stop to admire gets a cuddle out of it — and the only
-consequence is that a showcase session spends two of that day's hugs on a pet
-you are also raising.
 
 Set `PET_SHOWCASE` to `0` in `pet_face.h` for a build where the buttons only play
 the game.
@@ -497,7 +650,7 @@ python3 -m http.server -d build-sim 8000
 
 ## 12. Verification
 
-Four harnesses in [tools/](tools/). None are part of the firmware build; each
+Six harnesses in [tools/](tools/). None are part of the firmware build; each
 prints a pass/fail report and exits non-zero on failure.
 
 ```sh
@@ -506,14 +659,18 @@ cc -O2 -o check_layers check_layers.c && ./check_layers
 cc -O2 -o check_awake_time check_awake_time.c && ./check_awake_time
 cc -O2 -o check_balance check_balance.c && ./check_balance
 python3 check_sounds.py
+python3 check_showcase.py
+python3 check_economy.py
 ```
 
 | Harness | Proves | Re-run when |
 | --- | --- | --- |
 | `check_layers.c` | The procedural cells are off limits to every layer, the two layers overlap only in cell 9 where that is intended, and a rogue frame gets clipped | The region map or `_pet_layers` changes |
 | `check_awake_time.c` | Waking-seconds accounting is monotonic and additive over 400 spans, and handles whole nights and both day boundaries. Prints time-to-death from four start hours | `PET_HOUR_WAKE`/`PET_HOUR_SLEEP` or the decay rate change |
-| `check_balance.c` | A week of care at different visit rates and feed timings, printing the mood trajectory | Any tunable in the buff/debuff block changes |
+| `check_balance.c` | A week of care at different visit rates and feed timings, printing the mood trajectory, plus a pair of visits inside one sitting for the settling cooldown | Any tunable in the buff/debuff block changes |
 | `check_sounds.py` | Every cue describes a moment the art actually reaches, no cue repeats faster than its own sound can play, no sound is unreachable — whether it is cued or played directly — and every animation has art | **Any animation is redrawn**, or a cue or sound is edited |
+| `check_showcase.py` | The reel visits every entry in order and wraps, and from every position in it, leaving by any route puts the live pet back on screen showing its real mood. Prints the lap time | The showcase, `_pet_layer_tick` or `_pet_rest` change, or the reel is reordered |
+| `check_economy.py` | Every figure in §3 above still matches the tunables it was derived from | Any buff, debuff, cap or cooldown changes, or §3 is reworded |
 
 `check_sounds.py` parses `pet_face.c` directly, so it cannot go stale. Sample:
 
@@ -529,12 +686,18 @@ tumbles through it, so the slide fired twice and the second firing restarted a
 suppresses the repeat, and the report keeps the choice visible in case a redraw
 ever makes the second edge meaningful.
 
-The other three copy their constants from the firmware rather than including it.
-They are **not** wired to it, so a tunable changed in `pet_face.h` will not fail
-them until it is changed in both — check both if a number moves.
+`check_economy.py` is wired to both ends — it reads the `#define`s out of
+`pet_face.h` and the printed numbers out of §3, and fails when they disagree, so
+retuning a buff and forgetting the manual is caught rather than left for a reader
+to find. Run it on its own for the report it prints, which is the whole economy
+on one screen.
 
-**What they cannot tell you.** All four prove internal consistency, and all four
-passed through a build in which the poo was unreachable: sweeping cancelled the
+The three C harnesses copy their constants from the firmware rather than
+including it. They are **not** wired to it, so a tunable changed in `pet_face.h`
+will not fail them until it is changed in both — check both if a number moves.
+
+**What they cannot tell you.** They prove internal consistency, and every one of
+them passed through a build in which the poo was unreachable: sweeping cancelled the
 countdown that produced it, the arrival was only noticed on activate, and the
 scene was gated on a freshness window that a twelve-hour timer never lands
 inside. `check_layers` proved the status layer owns cell 9's `G B C`, which it
@@ -676,16 +839,18 @@ The classic build is byte-identical under all three.
 | Mood resolution | quarter tics, `uint8_t` |
 | Food queue | 4 pips on the plate, 4 kept down per sitting |
 | Hug allowance | 4 / calendar day |
+| Shake | 3 taps within 2 s, ≥ 0.25 s apart, ≥ 500 mg each |
 | Play ladder | 3 rungs, 3 s deaf + 5 s window between them |
 | Play buff cooldown | 2 h |
+| Settling after a barf | 30 min, or the next sitting, whichever is sooner |
 | Mess appears | 12 h after a meal |
 | Fatal at | 6 tics |
 | Animations | 14, decoded from GIF exports |
 | Sounds | 19 — 13 cued to frames, 6 played directly — at `BUZZER_PRIORITY_BUTTON` |
 | Muting | Follows the watch's `BTN beep` setting (`N` = silent) |
-| Flash | 138,424 text + 2,632 data = 141,056 (57% of 245,760) |
-| — of which is this face | **6,096 bytes**, 2.48% of the budget — see §16 |
-| RAM | **84 bytes** of context + 8 bytes of Movement's per-face arrays |
+| Flash | 139,024 text + 2,632 data = 141,656 (58% of 245,760) |
+| — of which is this face | **6,704 bytes**, 2.73% of the budget — see §16 |
+| RAM | **96 bytes** of context + 8 bytes of Movement's per-face arrays |
 
 ---
 
@@ -697,11 +862,11 @@ for the same source, per the gotcha in `CLAUDE.md`):
 
 | | text | data | bss |
 | --- | --- | --- | --- |
-| With the pet | 138,424 | 2,632 | 4,608 |
+| With the pet | 139,024 | 2,632 | 4,608 |
 | Without | 132,472 | 2,488 | 4,600 |
-| **The face** | **+5,952** | **+144** | **+8** |
+| **The face** | **+6,552** | **+144** | **+8** |
 
-**6,096 bytes of flash**, 2.48% of the 245,760 available, leaving ~102 KB free.
+**6,704 bytes of flash**, 2.73% of the 245,760 available, leaving ~102 KB free.
 Where it goes:
 
 | | bytes |
@@ -715,15 +880,21 @@ Where it goes:
 | The nine cue tables | 65 |
 | Everything else (cue engine, waking-time maths, layer engine) | ~1,198 |
 
-Three later passes account for 488 of that. Filling in every silent action — the
+Five later passes account for 1,088 of that. Filling in every silent action — the
 nine sounds the first pass left out — cost **200 bytes**, the three sittings with
 their overfeed barf another **128**, and turning the showcase from a stepper into
 the reel in §10 a further **152** (measured on the PC, GCC 14.2: 135,336 → 135,488
-text, `data` and `bss` unmoved). None was worth economising on.
+text, `data` and `bss` unmoved). Tempering the shake, deafening the reel and
+settling the stomach cost **472** between them, all of it in `text`, and moving
+the hug onto a two-button chord a further **128** — that one deleting a state
+field and buying back its own space in padding, so RAM did not move. None was
+worth economising on.
 
-**96 bytes of RAM.** `sizeof(pet_state_t)` is 88, `malloc`ed once in
-`pet_face_setup` and never freed; Movement's `watch_face_contexts` and
-`scheduled_tasks` arrays each grow by one entry. That is 0.29% of the 32 KB.
+**104 bytes of RAM.** `sizeof(pet_state_t)` is 96 — nine bytes of it added by the
+settling clock and the tap counter, three more by the padding they fell into —
+`malloc`ed once in `pet_face_setup` and never freed; Movement's
+`watch_face_contexts` and `scheduled_tasks` arrays each grow by one entry. That is
+0.32% of the 32 KB.
 
 ### Battery
 

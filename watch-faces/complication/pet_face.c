@@ -606,9 +606,19 @@ static pet_anim_id_t _pet_mood_anim(pet_mood_t mood) {
 // ignores motion — a dead one — should not have it on.
 static void _pet_set_tap_detection(pet_state_t *s, bool want) {
     if (want == s->tap_enabled) return;
-    if (want) movement_enable_tap_detection_if_available(false);
-    else      movement_disable_tap_detection_if_available();
+    if (want) {
+        // Movement writes its own threshold on the way in, so the face's goes
+        // on after it -- and only if there was an accelerometer to write to.
+        if (movement_enable_tap_detection_if_available(false)) {
+            lis2dw_configure_tap_threshold(0, 0, PET_SHAKE_THRESHOLD,
+                                           LIS2DW_REG_TAP_THS_Z_Z_AXIS_ENABLE);
+        }
+    } else {
+        movement_disable_tap_detection_if_available();
+    }
     s->tap_enabled = want;
+    // Taps counted before the ear closed are no part of the next shake.
+    s->shake_taps = s->shake_ticks = s->shake_gap = 0;
 }
 
 // Add (or subtract) quarter tics, pinned to 0 .. dead.
@@ -1010,6 +1020,12 @@ static const uint8_t _pet_showcase_reel[] = {
 
 // Put the reel's current entry on screen, alone, from its first frame.
 static void _pet_showcase_play(pet_state_t *s) {
+    // Deaf for the duration, at the hardware. The reel is a performance, and
+    // being handled while it plays should not cut it short or set the pet
+    // playing underneath it. Every exit rests the pet, and _pet_rest turns
+    // detection back on for anything but a dead one, so there is nothing to
+    // restore here. It saves the 400 Hz high-performance mode as well.
+    _pet_set_tap_detection(s, false);
     s->showcase_on = true;
     s->showcase_plays = 0;
     s->queue_len = 0;
@@ -1041,28 +1057,27 @@ static void _pet_showcase_advance(pet_state_t *s) {
 // screen for good: a healthy pet stuck confused, snoring at noon, or dead. Five
 // of the reel's fourteen entries loop.
 //
-// Only rests if the showcase actually had the screen, since _pet_rest would
-// otherwise cut short whatever the pet was doing.
-//
-// `remember` is for the 0.5 s press that arrives on the way to LIGHT's 1.5 s
-// hold: it notes that the screen was taken from a running reel, so the hold
-// behind it cancels the reel instead of starting a new one.
-static void _pet_showcase_exit(pet_state_t *s, bool remember) {
-    bool had_screen = s->showcase_on;
+// Does nothing unless the showcase actually has the screen, since _pet_rest
+// would otherwise cut short whatever the pet was doing.
+static void _pet_showcase_exit(pet_state_t *s) {
+    if (!s->showcase_on) return;
     s->showcase_on = false;
-    s->showcase_interrupted = remember && had_screen;
-    if (had_screen) _pet_rest(s);
+    _pet_rest(s);
 }
 
 // LIGHT held 1.5 s: start the reel, or cancel the one that is running.
 //
-// showcase_on is never the thing to test here -- the 0.5 s press has always
-// already cleared it and put the pet back on screen. showcase_interrupted is
-// what says the reel was up a moment ago, which is why it exists.
+// showcase_on is the whole test. It could not always be: the hug used to sit on
+// LIGHT's 0.5 s press, which arrives on the way to every 1.5 s hold and handed
+// the screen back for its kiss, so by the time the hold landed the flag had
+// already been cleared by the gesture that was trying to read it. That needed a
+// second flag to remember what the first had forgotten, cleared on BUTTON_DOWN
+// to stay ahead of Movement's event ordering. Moving the hug to the chord
+// deleted the whole arrangement: LIGHT's 0.5 s press now does nothing.
 static void _pet_showcase_toggle(pet_state_t *s) {
-    if (s->showcase_interrupted) {
-        s->showcase_interrupted = false;
-        return;                 // the 0.5 s press has already rested the pet
+    if (s->showcase_on) {
+        _pet_showcase_exit(s);
+        return;
     }
     s->showcase_step = 0;       // every start is from the top of the reel
     _pet_showcase_play(s);
@@ -1205,10 +1220,33 @@ static bool _pet_blocked(pet_state_t *s) {
 // the caller.
 static void _pet_barf_scene(pet_state_t *s) {
     _pet_flash_buff(s, false);
+    // Whatever brought it on, the stomach needs settling before it will take
+    // food again. Recording the sitting is what lets the next one cut that
+    // short; see PET_BARF_SETTLE_SECONDS.
+    watch_date_time_t local = movement_get_local_date_time();
+    s->barf_until_ts = _pet_now() + PET_BARF_SETTLE_SECONDS;
+    s->barf_day = local.unit.day;
+    s->barf_seg = _pet_meal_segment(local.unit.hour);
+    // Whatever was still on the plate goes with it. A play barf can land while
+    // pips are queued, and they would otherwise sit there to be eaten by the
+    // next feed, hours later.
+    s->food_queue = 0;
+    s->feed_ticks = 0;
     // _pet_set_status runs when the scene rests, so the puddle appears as the
     // animation finishes rather than before it has started.
     s->has_barf = true;
     _pet_start_anim(s, PET_ANIM_BARF);
+}
+
+// True while the stomach is still settling: inside PET_BARF_SETTLE_SECONDS of a
+// barf and still in the sitting that barf happened in. The sitting turning over
+// ends it early -- a new meal window is a clean stomach, whichever came first.
+static bool _pet_settling(pet_state_t *s) {
+    if (s->barf_until_ts == 0) return false;
+    watch_date_time_t local = movement_get_local_date_time();
+    if (s->barf_day != local.unit.day) return false;
+    if (s->barf_seg != _pet_meal_segment(local.unit.hour)) return false;
+    return _pet_now() < s->barf_until_ts;
 }
 
 // Overfed. The pip comes straight back up and takes the sitting's nutrition
@@ -1222,9 +1260,7 @@ static void _pet_barf_scene(pet_state_t *s) {
 static void _pet_feed_barf(pet_state_t *s) {
     _pet_add_qt(s, (int16_t) (s->seg_buff_qt + PET_DEBUFF_BARF));
     s->seg_buff_qt = 0;
-    s->food_queue = 0;
-    s->feed_ticks = 0;
-    _pet_barf_scene(s);
+    _pet_barf_scene(s);   // which clears the plate, and shuts the kitchen
 }
 
 // Feed: each press queues a pip, up to PET_FOOD_MAX. Eating starts
@@ -1232,6 +1268,14 @@ static void _pet_feed_barf(pet_state_t *s) {
 // PET_FEED_PIP_SECONDS; a press during eating restarts the wait.
 static void _pet_feed_press(pet_state_t *s) {
     if (_pet_blocked(s)) return;
+    if (_pet_settling(s)) {
+        // The kitchen is shut: the pet grumbles the plate away. Nothing is
+        // charged for it -- the barf that shut it has been paid for already --
+        // so there is no sign to flash, only the sound and its indicator.
+        _pet_play_sound(s, PET_SOUND_GRUMBLE);
+        _pet_draw(s);
+        return;
+    }
     if (s->food_queue < PET_FOOD_MAX) s->food_queue++;
     s->feed_ticks = PET_FEED_SETTLE_SECONDS * PET_ANIM_HZ;
     s->scene = PET_SCENE_FEEDING;
@@ -1298,6 +1342,30 @@ static void _pet_hug(pet_state_t *s) {
     _pet_start_anim(s, PET_ANIM_KISS);
 }
 
+// Both buttons at once: a hug, with an arm on each side. It fires on whichever
+// of the two lands second rather than waiting out a hold, so it answers at once
+// -- holding both for a moment happens by itself anyway.
+//
+// chord_hugged then swallows the rest of the gesture: both releases, and the
+// 0.5 s and 1.5 s presses behind them if the buttons stay down. Without that,
+// letting go of a hug would feed the pet and sweep the floor.
+static void _pet_chord(pet_state_t *s) {
+    s->chord_hugged = true;
+#if PET_SHOWCASE
+    _pet_showcase_exit(s);      // the kiss needs the screen
+#endif
+    _pet_hug(s);
+}
+
+// A release belonging to a spent chord does nothing of its own; true means the
+// caller should stop. The note clears once both buttons are up, so the next
+// press starts clean.
+static bool _pet_chord_release(pet_state_t *s) {
+    if (!s->chord_hugged) return false;
+    if (!s->light_down && !s->alarm_down) s->chord_hugged = false;
+    return true;
+}
+
 // Clear everything on the floor, pile and puddle together. Works at night
 // without waking the pet, and leaves a poo still on its way alone.
 static void _pet_sweep(pet_state_t *s) {
@@ -1343,6 +1411,7 @@ static void _pet_resurrect(pet_state_t *s) {
     s->last_play_buff_ts = 0;
     s->pips_this_seg = 0;
     s->seg_buff_qt = 0;
+    s->barf_until_ts = 0;
     s->scene = PET_SCENE_IDLE;
     _pet_start_anim(s, PET_ANIM_RESURRECT);   // then rests into the mood
 }
@@ -1399,6 +1468,32 @@ static void _pet_on_motion(pet_state_t *s) {
     _pet_start_anim(s, PET_ANIM_PLAY_SMALL);
 }
 
+// A shake is a deliberate burst of taps rather than one knock; the reasoning is
+// next to PET_SHAKE_TAPS. The window runs from the first tap and is not extended
+// by the ones after it, and each counted tap closes the ear for
+// PET_SHAKE_GAP_TICKS, so one impulse ringing out cannot fill the count alone.
+#define PET_SHAKE_WINDOW_TICKS (PET_SHAKE_WINDOW_SECONDS * PET_ANIM_HZ)
+
+static void _pet_on_tap(pet_state_t *s) {
+    if (s->shake_gap) return;               // the last tap, still sounding
+    s->shake_gap = PET_SHAKE_GAP_TICKS;
+    if (s->shake_ticks == 0) {              // the first tap opens the window
+        s->shake_taps = 0;
+        s->shake_ticks = PET_SHAKE_WINDOW_TICKS;
+    }
+    if (++s->shake_taps < PET_SHAKE_TAPS) return;
+    s->shake_taps = 0;
+    s->shake_ticks = 0;
+    _pet_on_motion(s);
+}
+
+// Age the count once a tick, whatever the scene is: a burst that began before an
+// animation took the screen still has to expire on time.
+static void _pet_shake_tick(pet_state_t *s) {
+    if (s->shake_gap) s->shake_gap--;
+    if (s->shake_ticks && --s->shake_ticks == 0) s->shake_taps = 0;
+}
+
 static void _pet_play_tick(pet_state_t *s) {
     // Hold the countdown until the flourish has played out.
     if (_pet_anim_busy(s)) return;
@@ -1428,13 +1523,15 @@ static void _pet_enter(pet_state_t *s) {
     s->food_queue = 0;
     s->play_stage = 0;
     s->play_buffed = false;
+    // A visit starts with both buttons up, whatever was held on the way in --
+    // Movement does not forward a release whose press went to another face.
+    s->light_down = s->alarm_down = s->chord_hugged = false;
     s->buff_ticks = s->debuff_ticks = s->bell_ticks = s->signal_ticks = 0;
     _pet_layer_play(s, PET_LAYER_CHARACTER, PET_ANIM_NONE);
     _pet_layer_play(s, PET_LAYER_STATUS, PET_ANIM_NONE);
 #if PET_SHOWCASE
     s->showcase_on = false;
-    s->showcase_interrupted = false;    // a fresh visit starts the reel over
-    s->showcase_step = 0;
+    s->showcase_step = 0;               // a fresh visit starts the reel over
 #endif
     // Put the floor up from the first frame, rather than waiting for _pet_rest.
     _pet_set_status(s);
@@ -1533,6 +1630,7 @@ static void _pet_tick(pet_state_t *s, uint8_t subsecond) {
             _pet_draw(s);
         }
     }
+    _pet_shake_tick(s);
     _pet_flash_tick(s);
     _pet_anim_tick(s);
 }
@@ -1569,22 +1667,17 @@ bool pet_face_loop(movement_event_t event, void *context) {
 #if PET_SHOWCASE
     // Any real interaction cancels the reel.
     switch (event.event_type) {
-        // Feed, sweep or shake: hand the screen back, and that is the end of it.
+        // Feed, sweep, or ALARM's 0.5 s on its way to the mood step: hand the
+        // screen back, and that is the end of it.
+        //
+        // Two things are deliberately not on this list. Motion, because the reel
+        // is deaf while it runs and the taps never arrive -- see
+        // _pet_showcase_play. And the hug, because the chord hands the screen
+        // back itself, in _pet_chord, before its kiss needs it.
         case EVENT_LIGHT_BUTTON_UP:
         case EVENT_ALARM_BUTTON_UP:
-        case EVENT_SINGLE_TAP:
-        case EVENT_DOUBLE_TAP:
-            _pet_showcase_exit(s, false);
-            break;
-        // The 0.5 s press arrives on the way to every 1.5 s hold: hand the
-        // screen back, which the hug's kiss needs. LIGHT's hold behind it is the
-        // one that toggles the reel, so only that one needs to be told the reel
-        // was running; ALARM's only steps the mood and ends the reel either way.
-        case EVENT_LIGHT_LONG_PRESS:
-            _pet_showcase_exit(s, true);
-            break;
         case EVENT_ALARM_LONG_PRESS:
-            _pet_showcase_exit(s, false);
+            _pet_showcase_exit(s);
             break;
         default:
             break;
@@ -1599,64 +1692,79 @@ bool pet_face_loop(movement_event_t event, void *context) {
             _pet_tick(s, event.subsecond);
             break;
 
-        // Light: short = feed, long = hug. The empty cases keep Movement from
-        // lighting the LED on press and from reacting to the long release.
+        // Light: short = feed. Both buttons together = hug, so every edge of
+        // both is tracked and a press is only itself while the other is up.
+        // Movement gives a button exactly two release events -- BUTTON_UP under
+        // half a second, LONG_UP over it, the 1.5 s release included, since
+        // REALLY_LONG_UP is commented out of the enum -- so those two are where
+        // a button is marked up again. Handling BUTTON_DOWN here also keeps
+        // Movement from lighting the LED.
         case EVENT_LIGHT_BUTTON_DOWN:
-#if PET_SHOWCASE
-            // Start of the press, so start clean: the note the 0.5 s press
-            // leaves must not outlive the hold it was left for and cancel the
-            // next reel instead of starting it.
-            //
-            // Clearing it here rather than on the release is what makes that
-            // airtight. Movement drains a batch of pending events in enum
-            // order, and LONG_UP sorts before REALLY_LONG_PRESS -- so a release
-            // landing in the same batch as the 1.5 s timeout would wipe the note
-            // just before the hold read it. BUTTON_DOWN sorts first and always
-            // begins the press, so the note can only be set and read within one.
-            s->showcase_interrupted = false;
-#endif
-            break;
-        case EVENT_LIGHT_LONG_UP:
-            break;
-        case EVENT_LIGHT_REALLY_LONG_PRESS:
-#if PET_SHOWCASE
-            _pet_showcase_toggle(s);
-#endif
+            s->light_down = true;
+            if (s->alarm_down) _pet_chord(s);
             break;
         case EVENT_LIGHT_BUTTON_UP:
+            s->light_down = false;
+            if (_pet_chord_release(s)) break;
             _pet_feed_press(s);
             break;
         case EVENT_LIGHT_LONG_PRESS:
-            _pet_hug(s);
+            // Nothing lives here any more. The hug used to, and moving it to the
+            // chord is what lets the 1.5 s hold below reach the reel clean.
+            break;
+        case EVENT_LIGHT_LONG_UP:
+            s->light_down = false;
+            _pet_chord_release(s);
+            break;
+        case EVENT_LIGHT_REALLY_LONG_PRESS:
+#if PET_SHOWCASE
+            if (!s->chord_hugged) _pet_showcase_toggle(s);
+#endif
             break;
 
         // Alarm: short = sweep, long = resurrect.
+        case EVENT_ALARM_BUTTON_DOWN:
+            s->alarm_down = true;
+            if (s->light_down) _pet_chord(s);
+            break;
         case EVENT_ALARM_BUTTON_UP:
+            s->alarm_down = false;
+            if (_pet_chord_release(s)) break;
             _pet_sweep(s);
             break;
         case EVENT_ALARM_LONG_PRESS:
+            if (s->chord_hugged) break;
             if (s->scene == PET_SCENE_DEAD) {
                 _pet_resurrect(s);
             }
 #ifdef __EMSCRIPTEN__
             else {
-                // The simulator has no accelerometer: stand in for a shake.
+                // The simulator has no accelerometer: stand in for a whole
+                // shake. The tap filter is hardware timing, and a button press
+                // is no way to exercise it.
                 _pet_on_motion(s);
             }
 #endif
             break;
         case EVENT_ALARM_LONG_UP:
+            s->alarm_down = false;
+            _pet_chord_release(s);
             break;
         case EVENT_ALARM_REALLY_LONG_PRESS:
 #if PET_SHOWCASE
-            _pet_showcase_step_mood(s);
+            if (!s->chord_hugged) _pet_showcase_step_mood(s);
 #endif
             break;
 
         case EVENT_SINGLE_TAP:
         case EVENT_DOUBLE_TAP:
         case EVENT_ACCELEROMETER_WAKE:
-            _pet_on_motion(s);
+#if PET_SHOWCASE
+            // Belt and braces. The reel disables detection, but an interrupt
+            // latched just before it did would still be delivered here.
+            if (s->showcase_on) break;
+#endif
+            _pet_on_tap(s);
             break;
 
         case EVENT_TIMEOUT:

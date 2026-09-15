@@ -19,6 +19,9 @@
 #define SEG_HOURS ((PET_HOUR_SLEEP - PET_HOUR_WAKE) / SEGMENTS)
 #define SEG_CAP 4
 #define DEBUFF_BARF 1
+// Every barf shuts the kitchen for this long, or until the sitting turns over.
+// A feed inside it is refused outright and costs nothing.
+#define BARF_SETTLE (30 * 60)
 
 static int meal_seg(uint32_t now) {
     int hour = (now % 86400) / 3600;
@@ -44,9 +47,19 @@ typedef struct {
     uint16_t resid, poo_resid;
     int hugs_today; int hug_day;
     int pips_seg, seg_buff, fed_day, fed_seg;
+    uint32_t barf_until; int barf_day, barf_seg;
 } pet_t;
 
 static void add(pet_t *p, int d) { p->qt += d; if (p->qt < 0) p->qt = 0; if (p->qt > QT_DEAD) p->qt = QT_DEAD; }
+
+// Still settling: inside BARF_SETTLE of a barf and still in the sitting it
+// happened in, whichever of the two runs out first.
+static bool settling(const pet_t *p, uint32_t now) {
+    if (!p->barf_until) return false;
+    if (p->barf_day != (int)(now / 86400)) return false;
+    if (p->barf_seg != meal_seg(now)) return false;
+    return now < p->barf_until;
+}
 
 static void catch_up(pet_t *p, uint32_t now) {
     if (p->qt >= QT_DEAD) return;
@@ -73,6 +86,9 @@ static void visit(pet_t *p, uint32_t now, bool feed, int pips) {
     // survives, so a diligent owner still meets every poo they earned.
     p->has_poo = false; p->poo_resid = 0;
     while (p->hugs_today < HUG_CAP) { p->hugs_today++; add(p, -1); } // hug
+    // A stomach still settling from a barf refuses the plate. Nothing is eaten
+    // and nothing is charged -- not even the missed-feed clock restarts.
+    if (feed && settling(p, now)) feed = false;
     if (feed) {
         for (int i = 0; i < pips; i++) {
             int day = now / 86400, seg = meal_seg(now);
@@ -83,6 +99,8 @@ static void visit(pet_t *p, uint32_t now, bool feed, int pips) {
             if (p->pips_seg >= SEG_CAP) {       // overfed: it all comes back up
                 add(p, p->seg_buff + DEBUFF_BARF);
                 p->seg_buff = 0;
+                p->barf_until = now + BARF_SETTLE;  // ... and the kitchen shuts
+                p->barf_day = day; p->barf_seg = seg;
                 break;                          // and the plate is cleared
             }
             p->pips_seg++; p->seg_buff += 1;
@@ -91,6 +109,20 @@ static void visit(pet_t *p, uint32_t now, bool feed, int pips) {
         }
     }
     if ((now - p->last_play) >= PLAY_COOLDOWN) { p->last_play = now; add(p, -2); } // play
+}
+
+// Overfeed at 08:00, then call again at `second`. run() cannot express this --
+// its visits are hours apart and land in different sittings. The hug cap and the
+// two-hour play cooldown are both spent by the first visit, so all that is left
+// in the second is the plate and whatever decayed in between; the control row
+// below, which calls at the same moment without feeding, is the decay alone.
+static void settle_case(const char *name, uint32_t second, bool feed_again) {
+    pet_t p = {0};
+    p.last = p.fed = H(7); p.hug_day = 0; p.last_play = 0;
+    visit(&p, H(8), true, 8);
+    int after_first = p.qt;
+    visit(&p, second, feed_again, 4);
+    printf("  %-44s %2d -> %2d\n", name, after_first, p.qt);
 }
 
 static void run(const char *name, const int *hours, int n_hours, int feed_at, int pips) {
@@ -128,7 +160,18 @@ int main(void) {
     run("3/day, 8 pips at one sitting",        three, 3, 0, 8);
     run("1/day, 8 pips at one sitting",        one,   1, 0, 8);
 
+    // The settling cooldown. The fifth pip at 08:00 comes back up and shuts the
+    // kitchen for half an hour, so a second plate at 08:20 is refused outright
+    // and costs nothing. By 09:00 the stomach has settled and the food is taken
+    // -- and comes straight back up, because this sitting's cap is still spent.
+    // Settling says the pet will eat again, not that it will keep it down.
+    puts("\nafter an overfeed at 08:00 (quarter tics before -> after)");
+    settle_case("second plate at 08:20, still settling", H(8) + 30 * 60 - 600, true);
+    settle_case("no second plate at 09:00 (control)",    H(9), false);
+    settle_case("second plate at 09:00, settled",        H(9), true);
+
     // Neglect: no visits at all.
+    puts("");
     pet_t p = {0}; p.last = p.fed = H(7); p.hug_day = 0;
     printf("  %-34s", "no care at all");
     for (int day = 0; day < 7; day++) { catch_up(&p, day * 86400 + H(23)); printf(" %2d", p.qt); }

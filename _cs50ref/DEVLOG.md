@@ -1752,3 +1752,231 @@ behind it by one segment — deliberately, not by accident. `decode.sh` stays
 exactly as useful for what it was built for, which is getting a drawing into the
 file without transcribing it by hand; what changed is that re-running it on an
 old export is no longer assumed to be safe. Check the diff before pasting.
+
+---
+
+## Session 20 — a shake worth the name
+
+Three complaints from a week of wearing it, all of them about the pet reacting to
+things the wearer had not done.
+
+### One tap was a whole rung
+
+The accelerometer was the loudest of the three. It interrupted meals, cut moods
+short and put `PLAY 1` on screen while the watch was sitting on a desk — and the
+reason is that the code took a single hardware tap as a shake. Movement sets the
+LIS2DW's Z-axis tap threshold to 12, or 750 mg at the 2 g full scale it runs, and
+750 mg is not much: a knock against a table, a hand going into a pocket, an arm
+swung hard enough clears it. Each one climbed a rung.
+
+The fix is a burst. `PET_SHAKE_TAPS` taps — three — have to land inside
+`PET_SHAKE_WINDOW_SECONDS` of the first, no two of them closer together than
+`PET_SHAKE_GAP_TICKS`. Short of that the count expires and nothing happened.
+
+Three parameters rather than one, because each rejects a different thing:
+
+- **The count** rejects the isolated knock. Nothing incidental produces three
+  deliberate taps.
+- **The window** stops the count accumulating over a morning. It runs from the
+  first tap and is deliberately *not* extended by the ones after it, so it is a
+  burst and not a slow drum; a tap an hour never adds up to a shake.
+- **The gap** rejects one *hard* knock. This is the one that is easy to miss. The
+  hardware's quiet period at 400 Hz is about 60 ms and its shock window 40 ms, so
+  a single impulse ringing out through the case can report several taps in a row
+  — and without a gap those three would have satisfied the count on their own,
+  turning a sharp knock into a guaranteed shake rather than an unlikely one.
+  Anything inside 250 ms is read as the same knock still sounding.
+
+With three taps wanted, each can afford to be easier to land, so the face writes
+its own threshold — `PET_SHAKE_THRESHOLD`, 8, or 500 mg — immediately after
+`movement_enable_tap_detection_if_available` returns true. Deliberate tapping
+then registers reliably and the count does the rejecting, which is the right way
+round: a sensitive ear with a strict brain, rather than a deaf ear hoping the one
+thing it hears was meant.
+
+That override leaks nowhere. Every face that wants taps calls
+`movement_enable_tap_detection_if_available` on its own activate and that writes
+12 back, and the disable path zeroes the register outright. The return value is
+now checked, so a board without an accelerometer is never written to.
+
+**This is not the tap counting that Session 10 abandoned**, and the distinction is
+worth keeping straight because the code looks similar. That build let the number
+of taps choose the *rung*, which measured how hard the watch was shaken rather
+than how long it was played with, and a single flick either registered once or
+shot straight past the nausea limit. The ladder is still paced by the clock. What
+the count decides now is only whether a shake happened at all — one burst,
+however many interrupts the hardware makes of it, is exactly one rung.
+
+### The reel could be shaken out of
+
+The showcase reel is a performance, and watching one means holding the watch,
+which meant motion cancelled it and started a play session underneath. Buttons
+should cancel it — you asked for that. Being handled should not.
+
+So the reel is deaf: `_pet_showcase_play` disables tap detection outright, and
+every exit already runs through `_pet_rest`, which turns it back on for any pet
+that is not dead. There was nothing to add on the restore side. `EVENT_SINGLE_TAP`
+came off the showcase's cancel list, and the main handler drops taps while
+`showcase_on` in case an interrupt was latched a moment before the disable.
+
+Turning it off at the hardware rather than filtering in software also parks the
+accelerometer's 400 Hz high-performance mode for the length of the reel, which is
+the most expensive thing the face ever asks for.
+
+### A pet that had just been sick would eat again immediately
+
+The sitting cap from Session 17 stops the fifth pip staying down, but nothing
+stopped you offering a sixth the same second — barf, barf, barf, a quarter tic
+each time. And a pet that had just thrown up from rough play would take a full
+plate without hesitating, which reads wrong whatever the arithmetic says.
+
+Every barf now shuts the kitchen for `PET_BARF_SETTLE_SECONDS` — 30 minutes — or
+until the sitting turns over, whichever comes first. A feed inside that is
+refused: the pet grumbles, and nothing is charged, because the barf that shut the
+kitchen has been paid for already.
+
+It hangs off `_pet_barf_scene` rather than off the feeding code, which is what
+makes "tie it globally to the barf" true rather than approximately true: the play
+ladder's third rung and the fifth pip at the table reach the same function, so
+they get the same cooldown without either knowing about the other. While there,
+`_pet_barf_scene` also took over clearing the plate from `_pet_feed_barf`. That
+fixed a real if minor leak — a play barf landing while pips were queued left them
+on the plate, scene-less and uneaten, to be swallowed hours later by the next
+feed press.
+
+**Settling does not hand the sitting back**, and that is deliberate. Past the cap
+the pet is done eating until the next sitting either way, so waiting out the 30
+minutes after an overfeed buys a pip that is *taken* and then returned, for the
+penalty and nothing more. Resetting the count instead would have made the cap
+purchasable — four pips, a barf, half an hour, four more — which is the one thing
+Session 17 was built to prevent. After a *play* barf, where the cap is untouched,
+the same 30 minutes buys a meal that keeps. Both readings of "you can at least
+try and keep a meal down again" are satisfied by the same rule.
+
+The "or until the next sitting" half is almost always the looser of the two — a
+sitting is five hours — so it only bites on a barf in the last half hour of one,
+where a new meal window is a clean stomach and the clock would otherwise run past
+it.
+
+### What the harnesses had to say
+
+`check_sounds.py` needed no change and proved its worth anyway: the refusal reuses
+`PET_SOUND_GRUMBLE`, and the checker's direct-play scan picked that up by itself,
+now reporting `played directly by _pet_disturb, _pet_feed_press`.
+
+`check_balance.c` did not fail, and would not have — every routine in it feeds at
+08:00, 13:00 and 19:00, three different sittings, so the cooldown never binds and
+none of the numbers moved. That is exactly the gap worth closing, so it learned
+the rule and gained a pair of visits inside one sitting to exercise it. `run()`
+cannot express that — its visits are hours apart by construction — so
+`settle_case` places two calls by hand.
+
+The first draft of that read `3 -> 3` refused against `3 -> 5` accepted and
+invited the conclusion that a settled second plate costs two quarter tics. It
+costs one. The other is passive decay over the extra forty minutes, which the
+refused case was too early to be charged. A third row, calling at the same moment
+without feeding, prints the decay alone so the subtraction is on the page rather
+than in the reader's head.
+
+### The manual's arithmetic, made checkable
+
+Section 3 of the manual was a nine-row table that mixed gains and losses together
+and never added anything up. It is now four: what loses time, what gains time,
+what costs nothing either way — that third one did not exist, and it is where the
+confusion lives, since a hug past the cap and a play on cooldown both *look* like
+they should matter — and the arithmetic those add up to.
+
+Writing it turned up a number nobody had noticed. **One complete visit is worth
+exactly −2.5 tics** (four pips, four hugs, one play) and **passive decay is
+exactly +2.5 tics a day**. Those are equal. One full visit a day breaks even on
+paper and loses only because the meal drops a pile twelve hours later. That is
+the whole game in two lines, and it fell out of the tunables rather than being
+designed in.
+
+All of which is hand-derived from `#define`s, which is exactly the kind of thing
+that goes quietly wrong the first time a buff is retuned — and this file has
+already recorded one such drift, `sizeof(pet_state_t)` being given as 84 in §15
+and 88 in §16 of the same document.
+
+So `check_economy.py`, a sixth harness. It evaluates the tunables out of
+`pet_face.h`, recomputes the whole economy, prints it as a report, and then
+checks every number §3 prints against what it just computed. Retune a buff
+without touching the manual and it fails, naming both values.
+
+It earned its place on the first run, twice over. It caught that the over-shake
+barf had been written as **+1.0** when `PET_BUFF_PLAY` is 2 quarter tics and the
+penalty 1, making it **+0.75** — a real error, in a table whose whole purpose is
+to be trusted. And on the run after that it failed again, this time because the
+harness itself was formatting quarter tics to one decimal place: the manual was
+right and the checker was wrong. Both are the check doing its job.
+
+Proving it actually bites: changing `PET_HUG_CAP` from 4 to 5 fails five separate
+figures — the hug ceiling, the visit total, and all three rows of the visits
+table — each naming what the manual says against what the header now implies.
+
+While registering it, §12 turned out to have been claiming "four harnesses" while
+`check_showcase.py` had never been listed there at all. Six now, all listed.
+
+### The hug gets two arms
+
+Dan's idea, and it pays for itself twice.
+
+The hug moves off `LIGHT`'s 0.5 s press and onto both buttons at once — an arm on
+each side, which is the point. It fires on whichever of the two lands *second*
+rather than waiting out a hold, so it answers immediately; holding both for a
+moment happens by itself anyway.
+
+**Movement has no chord support**, but it does not need to. The three buttons are
+separate GPIO pins on separate interrupt channels (`BTN_LIGHT` PA30, `BTN_MODE`
+PA31, `BTN_ALARM` PA02), tracked as three independent `movement_button_t`s with
+their own timestamps, and both event streams reach the face. So the face tracks
+`light_down` / `alarm_down` itself and fires on the second down. The simulator is
+the same shape — `keydown`/`keyup` per key with auto-repeat filtered — so the
+chord is testable there too.
+
+The catch is the releases. Let go of a hug and, untreated, `LIGHT`'s release
+feeds the pet while `ALARM`'s sweeps the floor, and if the chord was held past
+half a second the presses behind them fire as well. So `chord_hugged` swallows
+the rest of the gesture and clears once both buttons are up.
+
+Getting that right meant knowing exactly how many ways a button can report a
+release. There are two, not three: `EVENT_*_BUTTON_UP` under half a second and
+`EVENT_*_LONG_UP` over it — the 1.5 s release included, because
+`EVENT_*_REALLY_LONG_UP` is commented out of the enum and
+`_process_button_event` returns `down_event + 3` for it. Had there been a third,
+missing it would have left a button stuck down and fired a hug at the next press
+of the other one.
+
+**What it bought.** `showcase_interrupted` is gone, and so is everything that
+existed to support it. That field only ever existed because the 0.5 s hug handed
+the screen back on its way to the 1.5 s hold, so `showcase_on` had been cleared
+by the very gesture trying to read it — and the fix needed clearing on
+`EVENT_LIGHT_BUTTON_DOWN` rather than on the release, to stay ahead of Movement
+draining each event batch in enum order with `LONG_UP` sorting before
+`REALLY_LONG_PRESS`. All of that reasoning, the most fragile in the file, is
+deleted. `_pet_showcase_toggle` is now three lines and tests `showcase_on`.
+
+Reaching the reel is also free now. It used to cost a hug each way.
+
+One route out of the showcase is no longer in the escape switch: the chord fires
+on a `BUTTON_DOWN`, long before either release gets there, so `_pet_chord` hands
+the screen back itself. `check_showcase.py` now reads that call out of the source
+the same way it reads `_pet_showcase_exit` — drop it and the kiss plays underneath
+a running reel, which none of the 520 escape simulations would see, since they
+model the exit rather than the call that performs it. Removing the call fails the
+check, as it should.
+
+`light_hold` came off the harness's list of escapes, because it is not one any
+more: `LIGHT` between 0.5 s and 1.5 s now does nothing at all. That is a small
+dead zone, and it is the price of the 1.5 s hold above it being clean.
+
+**128 bytes of flash and no RAM at all** — the three new flags replaced one
+removed field and fitted in padding that was already there, so
+`sizeof(pet_state_t)` stays 96.
+
+### Cost
+
+**472 bytes of flash** for the three fixes above, all `text` (138,424 → 138,896
+on the Mac, GCC 15.3), plus **128** for the chord, and **12 bytes of RAM** —
+`sizeof(pet_state_t)` 84 → 96, being nine bytes of new state and three of the
+padding they fell into. The face now stands at 6,704 bytes, 2.73% of the budget.

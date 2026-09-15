@@ -58,6 +58,21 @@ def read_exit_rests(src):
     return bool(helper) and "_pet_rest" in helper.group(0)
 
 
+def read_chord_exits(src):
+    """Does the hug hand the screen back before it kisses?
+
+    The hug is the one route out that is not in the escape switch -- the chord
+    fires on a BUTTON_DOWN, well before either release reaches it -- so
+    _pet_chord has to do it itself. Drop that call and the kiss plays underneath
+    a running reel, which no other check here would see.
+    """
+    helper = re.search(r"static void _pet_chord\(.*?\n\}", src, re.S)
+    if not helper:
+        return False
+    body = helper.group(0)
+    return "_pet_showcase_exit" in body and "_pet_hug" in body
+
+
 def read_reel(src):
     """The running order, out of _pet_showcase_reel."""
     table = src[src.index("static const uint8_t _pet_showcase_reel"):]
@@ -106,7 +121,6 @@ class Pet:
         self.has_poo, self.has_barf, self.poo_pending = has_poo, has_barf, False
         self.showcase_on = False
         self.showcase_step, self.showcase_plays = 0, 0
-        self.showcase_interrupted = False
         self.queue = []
         self.seen = []          # every entry the reel actually started, in order
 
@@ -202,41 +216,46 @@ class Pet:
         self.showcase_step = (self.showcase_step + 1) % len(self.reel)
         self.showcase_play()
 
-    def showcase_exit(self, remember):
-        had_screen = self.showcase_on
+    def showcase_exit(self):
+        if not self.showcase_on:
+            return
         self.showcase_on = False
-        self.showcase_interrupted = remember and had_screen
-        if had_screen and self.exit_rests:
+        if self.exit_rests:
             self.rest()
 
     def showcase_toggle(self):
-        if self.showcase_interrupted:
-            self.showcase_interrupted = False
+        if self.showcase_on:
+            self.showcase_exit()
             return
         self.showcase_step = 0
         self.showcase_play()
 
     def escape(self, how):
         """The escape switch at the top of pet_face_loop, then the action."""
-        # Every route past 0.5 s hands the screen back first; only LIGHT's
-        # remembers, because only LIGHT's has a toggle behind it.
-        self.showcase_exit(remember=(how == "light_cancel"))
+        if how == "chord":                                     # hug: both buttons
+            # Not in the escape switch -- _pet_chord hands the screen back
+            # itself, on the BUTTON_DOWN, before the kiss needs it.
+            self.showcase_exit()
+            if not self.blocked():
+                self.start_anim("KISS")
+            return
+        # Feed, sweep, and ALARM's 0.5 s on its way to the mood step.
+        if how in ("light_tap", "alarm_tap", "alarm_hold"):
+            self.showcase_exit()
         if how == "light_tap" and not self.blocked():          # feed
             self.scene = "FEEDING"
         elif how == "alarm_tap" and self.scene != "DEAD":      # sweep
             self.has_poo = self.has_barf = self.poo_pending = False
             self.set_status()
-        elif how == "light_hold" and not self.blocked():       # hug
-            self.start_anim("KISS")
-        elif how == "light_cancel":                            # hug, then cancel
-            if not self.blocked():
-                self.start_anim("KISS")
+        elif how == "light_cancel":                            # the 1.5 s toggle
             self.showcase_toggle()
         # alarm_hold on a live pet does nothing on its own
 
 
-# light_cancel is the 1.5 s hold: the hug at 0.5 s, then the toggle behind it.
-ESCAPES = ("light_cancel", "light_tap", "alarm_tap", "light_hold", "alarm_hold")
+# light_cancel is LIGHT's 1.5 s hold, which now reaches the toggle clean: its
+# 0.5 s press on the way past does nothing at all since the hug became a chord.
+# That is also why "light_hold" is no longer a route out -- it is not one.
+ESCAPES = ("light_cancel", "light_tap", "alarm_tap", "alarm_hold", "chord")
 STARTS = [("HAPPY", "IDLE"), ("CONFUSED", "IDLE"), ("ANGRY", "IDLE"),
           ("DEAD", "DEAD"), ("HAPPY", "ASLEEP"), ("HAPPY", "NIGHT_AWAKE"),
           ("UPSET", "FEEDING"), ("HAPPY", "PLAYING")]
@@ -288,7 +307,10 @@ def main():
     reel = read_reel(src)
     plays = read_plays(src)
     exit_rests = read_exit_rests(src)
-    print("leaving the showcase rests: %s\n" % ("yes" if exit_rests else "NO"))
+    chord_exits = read_chord_exits(src)
+    print("leaving the showcase rests: %s" % ("yes" if exit_rests else "NO"))
+    print("the hug takes the screen back first: %s\n"
+          % ("yes" if chord_exits else "NO"))
 
     missing = [a for a in reel if a not in anims]
     if missing:
@@ -296,6 +318,9 @@ def main():
         return 1
 
     problems = check_running_order(anims, reel, plays)
+    if not chord_exits:
+        problems.append("_pet_chord does not hand the screen back before hugging")
+        print("  _pet_chord does not hand the screen back before hugging")
     print()
 
     failures = []

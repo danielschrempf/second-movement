@@ -41,18 +41,20 @@
  *
  * Controls
  *   Light  short  Feed (queues up to 4 pips; eats after a 3 s pause)
- *   Light  long   Hug
+ *   Light + Alarm Hug -- an arm on each side, on whichever lands second
  *   Alarm  short  Sweep the floor (a pile or a barf puddle; not a poo on its way)
  *   Alarm  long   Resurrect (only while dead)
  *   Shake         Play (accelerometer; simulator: Alarm long while alive)
+ *                 A burst of PET_SHAKE_TAPS taps, not one knock
  *                 Each shake climbs a rung; the pet is deaf between them
  *   Mode          reserved by Movement — next face
  *   Light  1.5 s  Showcase: start the reel of every animation, or cancel it
  *                 (PET_SHOWCASE)
  *   Alarm  1.5 s  Showcase: push the mood up one tic
  *
- * The showcase holds fire their 0.5 s action on the way past, so starting the
- * reel also hugs the pet.
+ * Light's 0.5 s press does nothing on its own, and that is what keeps the 1.5 s
+ * hold behind it clean: nothing is spent reaching the showcase. Alarm's 0.5 s
+ * still resurrects on the way to its 1.5 s, which only matters while dead.
  *
  * The pet sleeps 21:00-06:00. Nothing decays while it does; disturbing it costs
  * tics and earns no buff. Nothing runs while you are on another face; time is
@@ -115,6 +117,30 @@
 #define PET_FEED_SETTLE_SECONDS     3   // pause after the last press before eating starts
 #define PET_FEED_PIP_SECONDS        1   // between pips
 
+// What counts as a shake. The accelerometer reports single taps in hardware,
+// and one of those is a low bar -- a knock against a desk, a brisk arm swing --
+// yet it used to be a whole rung of the play ladder. So the face does not play
+// on a tap. It plays on a deliberate pattern of them.
+//
+// PET_SHAKE_TAPS taps must land within PET_SHAKE_WINDOW_SECONDS of the first,
+// no two of them closer together than PET_SHAKE_GAP_TICKS. The window does not
+// stretch as taps arrive: it is a burst, not a slow drum. Short of the count
+// the window expires and nothing happened.
+//
+// The gap is what rejects one hard knock. The hardware's own quiet period is
+// around 60 ms, so a single impulse ringing out can report several taps; every
+// one inside the gap is that same knock still sounding.
+#define PET_SHAKE_TAPS              3   // taps that make a shake ...
+#define PET_SHAKE_WINDOW_SECONDS    2   // ... all within this of the first ...
+#define PET_SHAKE_GAP_TICKS         2   // ... and no two inside this (0.25 s)
+
+// Since three are wanted, each one can be easier to land than Movement's
+// default: the face sets its own LIS2DW Z-axis tap threshold after enabling
+// detection, in units of 1/32 of the 2 g full scale, so 62.5 mg a step.
+// Movement's own value is 12, or 750 mg. Raise this if the pet plays with
+// itself in a pocket, lower it if deliberate tapping goes unheard.
+#define PET_SHAKE_THRESHOLD         8   // 500 mg
+
 // Play: a ladder of three rungs, paced by the clock rather than by how many taps
 // a shake happens to produce.
 //
@@ -153,6 +179,17 @@
 #if (PET_HOUR_SLEEP - PET_HOUR_WAKE) % PET_FEED_SEGMENTS
 #error "the waking day must divide evenly into PET_FEED_SEGMENTS sittings"
 #endif
+
+// Settling the stomach. Every barf shuts the kitchen -- overfed at the table or
+// played with too hard, it makes no difference -- for this long or until the
+// next sitting comes round, whichever is sooner. Until then a feed is refused:
+// the pet grumbles the plate away, and it costs nothing, the barf's own debuff
+// having been charged already.
+//
+// Settling does not hand the sitting back. Past PET_FEED_SEGMENT_CAP the pet is
+// done eating until the next one either way, so a settled stomach means the
+// food will be taken -- not that it will stay down.
+#define PET_BARF_SETTLE_SECONDS     (30 * 60)
 
 // How long a disturbed pet stays up before settling again.
 #define PET_NIGHT_AWAKE_SECONDS     30
@@ -444,6 +481,11 @@ typedef struct {
     uint16_t awake_residual;
     uint16_t poo_residual;
     uint32_t last_play_buff_ts; // the play cooldown runs from here
+    // A barf shuts the kitchen until here -- or until the sitting it happened
+    // in turns over, which is what barf_day/barf_seg are for.
+    uint32_t barf_until_ts;     // 0 = the pet has never been sick
+    uint8_t  barf_day;
+    uint8_t  barf_seg;
     uint8_t  hugs_today;
     uint8_t  hug_day;           // local day-of-month hugs_today belongs to
     // The current sitting, and what has been eaten in it. seg_buff_qt is the eat
@@ -477,10 +519,21 @@ typedef struct {
     uint8_t  play_stage;        // rung of the play ladder: 1 small, 2 big; 0 is
                                 // idle, or a barf serving out its deaf period
     bool     play_buffed;       // did this play session actually earn the buff?
+    // Taps collected toward a shake: how many so far, ticks left in the window
+    // they must all land in, and ticks to ignore the last one's ringing for.
+    uint8_t  shake_taps;
+    uint8_t  shake_ticks;
+    uint8_t  shake_gap;
     bool     poo_pending;       // a poo has landed unwatched; play the scene when idle
     uint16_t night_awake_ticks;
     uint8_t  breath;            // which breath of the snore cycle we are on
     bool     tap_enabled;
+    // The hug is both buttons at once, so both edges are tracked. A chord that
+    // has been spent on a hug then swallows the rest of the gesture -- both
+    // releases, and the holds behind them. See _pet_chord.
+    bool     light_down;
+    bool     alarm_down;
+    bool     chord_hugged;
     // What is on the LCD right now, so a redraw only touches the cells that
     // changed. `stale` forces the next redraw to push everything.
     uint8_t  shadow[10];
@@ -489,10 +542,6 @@ typedef struct {
     bool     showcase_on;       // PET_SHOWCASE: the reel owns the screen
     uint8_t  showcase_step;     // ... which entry of the reel it is on
     uint8_t  showcase_plays;    // ... and how many passes of it have gone by
-    // The 0.5 s press on the way to the 1.5 s hold takes the screen back, so by
-    // the time the hold arrives showcase_on can no longer say whether the reel
-    // was running. This remembers, and is what the hold toggles against.
-    bool     showcase_interrupted;
 } pet_state_t;
 
 void pet_face_setup(uint8_t watch_face_index, void ** context_ptr);
