@@ -62,7 +62,7 @@ Long press is 0.5 s; the showcase holds in §10 are 1.5 s.
 | `LIGHT` hold | — | Nothing. It is only the way to the 1.5 s hold below |
 | `ALARM` | Sweep | Clears the floor — both a pile and a puddle. A poo still on its way is left alone |
 | `ALARM` hold | Resurrect | Only while dead |
-| Shake | Play | Three taps inside 2 s, not one knock — see §5. Each shake climbs a rung; 3 s deaf, then 5 s to shake again |
+| Shake | Play | Three taps inside 2 s, not one knock — see §5. Each shake climbs a rung; 5 s to shake again once the flourish ends |
 | `MODE` | Leave | Movement's default — next face |
 | `LIGHT`/`ALARM` hold 1.5 s | Showcase | Start or cancel the animation reel, or step the mood. Nothing is spent getting there — see §10 |
 
@@ -312,18 +312,25 @@ stops listening:
 | 2 | Shaking again inside the window | `PLAY 2`, the same shape a tone higher |
 | 3 | Shaking again inside the next window | Barf |
 
-After each flourish the pet is **deaf for 3 s**, then **listens for 5 s**. The
-pause is measured from the end of the animation, not from the shake, so the
-window you are offered is the whole of it. Let a window expire and the session
-ends where it stands.
+After each flourish the pet **listens for 5 s**. The window is measured from the
+end of the animation rather than from the shake, so the 2 s flourish is the
+pause and the 5 s is all window. Let one expire and the session ends where it
+stands.
+
+The flourish is also the pet's deafness: a shake that lands while one is still
+on screen is ignored. That is the whole of what stops a single shake climbing
+two rungs, and it is enough now only because a shake is three taps rather than
+one — there used to be a further 3 s of silence after every animation, back when
+a lone hardware tap was a rung and the burst one flick produces had to be
+swallowed somewhere downstream. §5 swallows it at the source instead.
 
 Reaching the third rung barfs — the buff is returned and a further 0.25 tic
 added, so over-shaking is strictly worse than not playing — and leaves a puddle
 in cell 9 to sweep. It also shuts the kitchen for half an hour, like any other
-barf; see §4. The barf serves out one more deaf period before the session
-ends, for the same reason the rungs have one: the tail of the shake that caused
-it would otherwise arrive as a fresh session and replace the barf animation with
-`PLAY 1`, while the puddle and the debuff had already landed.
+barf; see §4. The session is held to the end of the barf animation for the same
+reason the rungs are held to theirs: the tail of the shake that caused it would
+otherwise arrive as a fresh session and replace the barf animation with `PLAY 1`,
+while the puddle and the debuff had already landed.
 
 This replaced counting taps inside a single 5 s window, which measured how hard
 the watch was shaken rather than how long it was played with. One flick of the
@@ -782,14 +789,14 @@ activate and on a low-energy update, since Movement clears the display on a face
 switch and the shadow would otherwise describe a screen that no longer exists.
 Numbers in §16.
 
-**Motion.** Both halves of the play pause live in one countdown: `play_ticks`
-starts at `(deaf + window) × 8` and is heard only once it drops below
-`window × 8`. It does not start until `_pet_anim_busy` goes false, so the window
-runs from the end of the flourish and the pet is deaf for the animation itself —
-which is where most of the stray taps land. A barf keeps `PET_SCENE_PLAYING` and
-drops `play_stage` to 0, which reads as deaf whatever the countdown says, so the
-scene survives to the end of the barf animation plus one deaf period rather than
-being replaced by a new session. See §5 for why counting taps did not work.
+**Motion.** `_pet_anim_busy` is the pet's ear as well as the play clock:
+`_pet_play_tick` holds `play_ticks` until it goes false, so the window runs from
+the end of the flourish, and `_pet_on_motion` reads the same call, so a shake
+arriving during one is ignored. One condition, asked in two places, instead of a
+countdown with a deaf band at the top of it. A barf keeps `PET_SCENE_PLAYING`
+and drops `play_stage` to 0, which reads as deaf whatever is on screen, so the
+scene survives to the end of the barf animation rather than being replaced by a
+new session. See §5 for why counting taps did not work.
 
 **Frame rate** is 8 Hz (`movement_request_tick_frequency` takes powers of two).
 Art is drawn at 8 fps, so one exported frame is one frame on the watch and the
@@ -840,7 +847,7 @@ The classic build is byte-identical under all three.
 | Food queue | 4 pips on the plate, 4 kept down per sitting |
 | Hug allowance | 4 / calendar day |
 | Shake | 3 taps within 2 s, ≥ 0.25 s apart, ≥ 500 mg each |
-| Play ladder | 3 rungs, 3 s deaf + 5 s window between them |
+| Play ladder | 3 rungs, a 5 s window after each flourish |
 | Play buff cooldown | 2 h |
 | Settling after a barf | 30 min, or the next sitting, whichever is sooner |
 | Mess appears | 12 h after a meal |
@@ -848,8 +855,8 @@ The classic build is byte-identical under all three.
 | Animations | 14, decoded from GIF exports |
 | Sounds | 19 — 13 cued to frames, 6 played directly — at `BUZZER_PRIORITY_BUTTON` |
 | Muting | Follows the watch's `BTN beep` setting (`N` = silent) |
-| Flash | 138,920 text + 2,632 data = 141,552 (58% of 245,760) |
-| — of which is this face | **6,600 bytes**, 2.69% of the budget — see §16 |
+| Flash | 138,928 text + 2,632 data = 141,560 (58% of 245,760) |
+| — of which is this face | **6,608 bytes**, 2.69% of the budget — see §16 |
 | RAM | **96 bytes** of context + 8 bytes of Movement's per-face arrays |
 
 ---
@@ -862,25 +869,29 @@ for the same source, per the gotcha in `CLAUDE.md`):
 
 | | text | data | bss |
 | --- | --- | --- | --- |
-| With the pet | 138,920 | 2,632 | 4,608 |
+| With the pet | 138,928 | 2,632 | 4,608 |
 | Without | 132,472 | 2,488 | 4,600 |
-| **The face** | **+6,448** | **+144** | **+8** |
+| **The face** | **+6,456** | **+144** | **+8** |
 
-**6,600 bytes of flash**, 2.69% of the 245,760 available, leaving ~102 KB free.
+**6,608 bytes of flash**, 2.69% of the 245,760 available, leaving ~102 KB free.
 Where it goes:
 
 | | bytes |
 | --- | --- |
-| `pet_face_loop` — the whole state machine, since every `_pet_*` helper is static and gets inlined into it | 2,088 |
+| `pet_face_loop` — the whole state machine, since every `_pet_*` helper is static and gets inlined into it | 2,154 |
 | The fourteen frame tables | 1,812 |
 | `_pet_draw` — the compositor | 440 |
 | `_pet_anims` | 272 |
 | The nineteen sound sequences (`data`) | 145 |
 | `_pet_sounds`, the dispatch table | 76 |
 | The nine cue tables | 65 |
-| Everything else (cue engine, waking-time maths, layer engine) | ~1,198 |
+| Everything else (cue engine, waking-time maths, layer engine, the helpers too big to inline) | 1,591 |
 
-Five later passes account for 1,088 of that. Filling in every silent action — the
+Those rows are `nm -S` on `pet_face.o` and come to 6,555 — fifty-three short of
+the linked 6,608, because alignment padding and literal pools belong to no
+symbol.
+
+Six later passes account for 1,096 of that. Filling in every silent action — the
 nine sounds the first pass left out — cost **200 bytes**, the three sittings with
 their overfeed barf another **128**, and turning the showcase from a stepper into
 the reel in §10 a further **152** (measured on the PC, GCC 14.2: 135,336 → 135,488
@@ -895,6 +906,11 @@ twice: the passive decay and the poo's decay are one accumulator at two rates
 (`_pet_charge_decay`), the sitting a moment falls in was computed in three
 places (`_pet_sitting_now`), and `_pet_enter` kept its own copy of everything
 `_pet_rest` already does for a dead pet. Nothing about the game changed.
+
+Retiring the play ladder's deaf period — a tunable, three derived tick counts and
+a banded countdown, replaced by the `_pet_anim_busy` call already standing next
+to it — cost **8**. Not every simplification is a saving; this one buys a shorter
+rule rather than smaller code.
 
 **104 bytes of RAM.** `sizeof(pet_state_t)` is 96 — nine bytes of it added by the
 settling clock and the tap counter, three more by the padding they fell into —

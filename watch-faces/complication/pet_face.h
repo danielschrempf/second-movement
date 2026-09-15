@@ -46,7 +46,7 @@
  *   Alarm  long   Resurrect (only while dead)
  *   Shake         Play (accelerometer; simulator: Alarm long while alive)
  *                 A burst of PET_SHAKE_TAPS taps, not one knock
- *                 Each shake climbs a rung; the pet is deaf between them
+ *                 Each shake climbs a rung, once its flourish is off screen
  *   Mode          reserved by Movement — next face
  *   Light  1.5 s  Showcase: start the reel of every animation, or cancel it
  *                 (PET_SHOWCASE)
@@ -144,14 +144,17 @@
 // Play: a ladder of three rungs, paced by the clock rather than by how many taps
 // a shake happens to produce.
 //
-//   shake                  -> PLAY_SMALL, then deaf, then a window to shake again
-//   shake in that window   -> PLAY_BIG, deaf and a window again
-//   shake in that window   -> barf, then deaf once more before the session ends
+//   shake                  -> PLAY_SMALL, then a window to shake again
+//   shake in that window   -> PLAY_BIG, and a window again
+//   shake in that window   -> barf, which ends the session
 //   window expires         -> the session ends where it stands
 //
-// Both periods are measured from the end of the animation, not from the shake.
-#define PET_PLAY_DEAF_SECONDS       3   // motion ignored while the pet settles
-#define PET_PLAY_WINDOW_SECONDS     5   // ... and then this long to shake again
+// The window runs from the end of the flourish rather than from the shake, and
+// the flourish is itself the pause: the pet is deaf for as long as one is on
+// screen. There used to be an explicit deaf period after it as well, from when
+// a single hardware tap was a whole rung and the burst one shake produces had
+// to be swallowed somewhere. PET_SHAKE_TAPS swallows it at the source now.
+#define PET_PLAY_WINDOW_SECONDS     5   // to shake again before the session ends
 #define PET_PLAY_STAGE_BARF         3   // the rung that makes the pet sick
 // Shaking always plays with the pet, but the buff only lands once per cooldown.
 #define PET_PLAY_COOLDOWN_SECONDS   (2 * 60 * 60)
@@ -515,9 +518,9 @@ typedef struct {
     uint8_t  signal_ticks;      // stands in for a sound on a silent watch
     uint8_t  food_queue;
     uint16_t feed_ticks;
-    uint16_t play_ticks;        // deaf period plus window, counted down together
+    uint16_t play_ticks;        // window left to shake again in
     uint8_t  play_stage;        // rung of the play ladder: 1 small, 2 big; 0 is
-                                // idle, or a barf serving out its deaf period
+                                // idle, or a barf still on screen
     bool     play_buffed;       // did this play session actually earn the buff?
     // Taps collected toward a shake: how many so far, ticks left in the window
     // they must all land in, and ticks to ignore the last one's ringing for.

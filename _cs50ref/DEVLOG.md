@@ -2079,3 +2079,83 @@ RTC read per activate.
 All six harnesses pass unchanged, which is the point of the exercise: the only
 visible difference is `check_sounds.py` now reporting the death knell as played
 by `_pet_rest` alone rather than by `_pet_rest` and `_pet_enter`.
+
+---
+
+## Session 22 — the deaf period retires
+
+Dan, on the play ladder: *"now that the 'play' is three taps, would it be
+possible to unhook the 'deafness' period and just have a straight cooldown? That
+deaf buffer was only included to reduce the sensitivity."*
+
+He is right about what it was for. Session 13, cutting it from five seconds to
+three: *"Three still swallows the burst of taps a single shake produces, which is
+all it was ever there for."* One hardware tap was a whole rung then, so the only
+place to absorb a flick's worth of interrupts was downstream, in the ladder.
+Session 20 moved that absorption upstream — `PET_SHAKE_TAPS` taps inside
+`PET_SHAKE_WINDOW_SECONDS`, none closer than `PET_SHAKE_GAP_TICKS` — and the
+counter resets the moment a shake fires, so the tail of the flick that caused one
+cannot cause the next. The downstream buffer has been paying rent on a job that
+moved out.
+
+**What actually stood between the rungs.** Reading it before cutting: the deaf
+period was not the only thing holding the pet's ear shut. `_pet_play_tick` does
+not decrement `play_ticks` while `_pet_anim_busy`, so the counter sits at
+`PET_PLAY_WAIT_TICKS` — above the band — for the whole flourish. The flourish is
+2.0 s (`play_small` and `play_big` are 16 ticks each; `barf` is 20). Deafness was
+therefore *animation, then three more seconds*, and only the second half was the
+tunable.
+
+So the cut is not "delete `PET_PLAY_DEAF_SECONDS`". Deleting it alone and
+levelling the countdown would leave the pet hearing shakes during its own
+flourish, which is Session 13's bug in slow motion: a rung climbed mid-animation
+restarts the animation. The cut is to keep the half that was already doing the
+work and throw away the half that was insurance:
+
+```c
+-        if (s->play_stage == 0 || s->play_ticks > PET_PLAY_OPEN_TICKS) return;
++        if (s->play_stage == 0 || _pet_anim_busy(s)) return;
+```
+
+`_pet_on_motion` now asks the same question `_pet_play_tick` already asks. One
+condition, read in two places, in place of a countdown with a band at the top of
+it that only one of the two could see. Three derived macros collapse to one:
+
+```c
+-#define PET_PLAY_WAIT_TICKS ((PET_PLAY_DEAF_SECONDS + PET_PLAY_WINDOW_SECONDS) * PET_ANIM_HZ)
+-#define PET_PLAY_OPEN_TICKS (PET_PLAY_WINDOW_SECONDS * PET_ANIM_HZ)
+-#define PET_PLAY_DEAF_TICKS (PET_PLAY_DEAF_SECONDS * PET_ANIM_HZ)
++#define PET_PLAY_WINDOW_TICKS (PET_PLAY_WINDOW_SECONDS * PET_ANIM_HZ)
+```
+
+`play_ticks` means one thing now instead of two, which is most of the win. It was
+a window with a deaf band in its upper reaches, and the only way to know which
+you were looking at was to compare it against a second macro.
+
+**The barf.** `_pet_barf` set `play_ticks` to one more deaf period to keep the
+scene alive past the barf animation — Session 13 again, the barf that played
+`PLAY 1`. That is now `play_ticks = 0`, because the thing holding the scene was
+never the countdown: `_pet_play_tick` waits on `_pet_anim_busy` first, and
+`play_stage == 0` reads as deaf whatever the counter says. The countdown was
+padding behind a guard that did not need it.
+
+**What the wearer feels.** A rung used to run 2 s of flourish, 3 s of being
+ignored, 5 s of window. It now runs 2 s of flourish and 5 s of window. Dan cut
+the deaf period from five to three in Session 13 because standing there holding
+your wrist while the pet ignored you was too long; this is the same complaint
+answered completely. `PET_PLAY_WINDOW_SECONDS` stays at 5 — it was chosen to sit
+behind a pause and now sits behind a shorter one, so it may want revisiting on
+the wrist, but that is a number, not a mechanism.
+
+**It costs 8 bytes.** 138,920 -> 138,928 text, `data` and `bss` unmoved,
+`sizeof(pet_state_t)` still 96. Two comparisons against a macro became one call
+to a helper small enough that GCC kept it out of line (`_pet_anim_busy.isra.0`,
+28 bytes). Worth recording plainly: the previous session's tightening gave 104
+bytes back and this one spends 8. Simplification and size are correlated, not the
+same thing, and when they part company the shorter rule is still the one to keep
+— there is one fewer tunable to explain, and one fewer way for the two halves of
+a countdown to disagree.
+
+All six harnesses pass. None of them model the deaf period: `check_balance.c`
+scores sessions, not their pacing, which is the right seam — it is why a change
+to how the ladder is timed did not need a harness edited to stay green.

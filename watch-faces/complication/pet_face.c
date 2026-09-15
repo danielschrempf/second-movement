@@ -1428,36 +1428,34 @@ static void _pet_resurrect(pet_state_t *s) {
 }
 
 // Play: each shake climbs one rung of the ladder documented next to
-// PET_PLAY_DEAF_SECONDS. Both halves of the pause live in one countdown — above
-// PET_PLAY_OPEN_TICKS the pet is deaf, below it a shake is heard — and it does
-// not start until the flourish is off screen, see _pet_play_tick.
-#define PET_PLAY_WAIT_TICKS ((PET_PLAY_DEAF_SECONDS + PET_PLAY_WINDOW_SECONDS) * PET_ANIM_HZ)
-#define PET_PLAY_OPEN_TICKS (PET_PLAY_WINDOW_SECONDS * PET_ANIM_HZ)
-#define PET_PLAY_DEAF_TICKS (PET_PLAY_DEAF_SECONDS * PET_ANIM_HZ)
+// PET_PLAY_WINDOW_SECONDS. The window does not start until the flourish is off
+// screen — see _pet_play_tick — and the same condition is the pet's deafness,
+// so one shake cannot climb twice off the back of its own animation.
+#define PET_PLAY_WINDOW_TICKS (PET_PLAY_WINDOW_SECONDS * PET_ANIM_HZ)
 
 static void _pet_barf(pet_state_t *s) {
     // Return the buff this session granted, if any, and charge the barf on top.
     // The cooldown stays spent.
     _pet_add_qt(s, (s->play_buffed ? PET_BUFF_PLAY : 0) + PET_DEBUFF_BARF);
-    // Stage 0 ends the ladder but keeps the scene, so _pet_play_tick serves out
-    // one more deaf period before resting. Dropping straight to PET_SCENE_IDLE
-    // let the rest of the same shake start a fresh session, which replaced the
-    // barf animation with PLAY_SMALL.
+    // Stage 0 ends the ladder but keeps the scene, so _pet_play_tick holds on
+    // to the end of the barf animation before resting. Dropping straight to
+    // PET_SCENE_IDLE let the rest of the same shake start a fresh session,
+    // which replaced the barf animation with PLAY_SMALL.
     s->play_stage = 0;
-    s->play_ticks = PET_PLAY_DEAF_TICKS;
+    s->play_ticks = 0;
     _pet_barf_scene(s);
 }
 
 static void _pet_on_motion(pet_state_t *s) {
     if (s->scene == PET_SCENE_PLAYING) {
-        // Deaf while the pet settles, and from a barf until the scene ends.
-        if (s->play_stage == 0 || s->play_ticks > PET_PLAY_OPEN_TICKS) return;
+        // Deaf while a flourish is on screen, and from a barf until the scene ends.
+        if (s->play_stage == 0 || _pet_anim_busy(s)) return;
         s->play_stage++;
         if (s->play_stage >= PET_PLAY_STAGE_BARF) {
             _pet_barf(s);
         } else {
             // Shaken again inside the window: the next rung.
-            s->play_ticks = PET_PLAY_WAIT_TICKS;
+            s->play_ticks = PET_PLAY_WINDOW_TICKS;
             _pet_start_anim(s, PET_ANIM_PLAY_BIG);
         }
         return;
@@ -1467,7 +1465,7 @@ static void _pet_on_motion(pet_state_t *s) {
     uint32_t now = _pet_now();
     s->scene = PET_SCENE_PLAYING;
     s->play_stage = 1;
-    s->play_ticks = PET_PLAY_WAIT_TICKS;
+    s->play_ticks = PET_PLAY_WINDOW_TICKS;
 
     // The pet always plays along, but the buff only lands once per cooldown.
     s->play_buffed = (now - s->last_play_buff_ts) >= PET_PLAY_COOLDOWN_SECONDS;
